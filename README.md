@@ -18,7 +18,7 @@ Vectorized Backtesting: Uses vectorbt to run thousands of simulations in seconds
 
 Clone the repository:
 
-git clone [https://github.com/your-username/alpha-scanner-core.git](https://github.com/CapClark/alpha-scanner-core.git)
+git clone [https://github.com/CapClark/alpha-scanner-core.git](https://github.com/CapClark/alpha-scanner-core.git)
 cd alpha-scanner-core
 
 
