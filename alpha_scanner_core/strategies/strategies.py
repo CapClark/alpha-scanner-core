@@ -12,19 +12,33 @@ def get_rsi_signals(close_price, length=14, oversold=30, overbought=70):
 
     return entries, exits
 
-def get_bb_signals(close_price, window=20, std=2.0):
-    """Bollinger Band Mean Reversion Strategy"""
-    ma = vbt.MA.run(close_price, window=window).ma
-    rolling_std = close_price.rolling(window=window).std()
+def get_bb_signals(data: pd.Series, window: int = 20, std: float = 2.0):
+    """
+    Returns Bollinger Bands entries/exits as boolean arrays.
+    """
 
+    if isinstance(data, pd.DataFrame):
+        # Use 'Close' column if DataFrame
+        close = data['Close']
+    else:
+        close = data
+
+    # Moving Average
+    ma = close.rolling(window=window, min_periods=1).mean()
+
+    # Rolling Standard Deviation
+    rolling_std = close.rolling(window=window, min_periods=1).std().fillna(0)
+
+    # Upper and Lower Bands
     upper_band = ma + (rolling_std * std)
     lower_band = ma - (rolling_std * std)
 
-    # FIX: Handle NaNs explicitly
-    entries = close_price.vbt.crossed_below(lower_band).fillna(False)
-    exits = close_price.vbt.crossed_above(ma).fillna(False)
+    # Entry / Exit signals
+    entries = close < lower_band   # Buy when price crosses below lower band
+    exits = close > upper_band     # Sell when price crosses above upper band
 
-    return entries, exits
+    # Return as NumPy arrays
+    return entries.values, exits.values
 
 def get_sma_signals(close_price, fast_window=50, slow_window=200):
     """SMA Trend Following Strategy"""

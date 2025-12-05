@@ -1,27 +1,38 @@
-import numpy as np
+# alpha_scanner_core/engine/robustness_score.py
 
-def calculate_robustness_metrics(pf, min_trades=10):
-    """Calculates Profit Factor, Trade Count, and Score."""
-    trade_count = pf.trades.count()
+def calculate_robustness_metrics(portfolio, min_trades: int = 2) -> dict | None:
+    """
+    Calculate robustness metrics from a VectorBT Portfolio object.
+    
+    Args:
+        portfolio: vectorbt Portfolio object
+        min_trades: minimum number of trades to calculate metrics
 
+    Returns:
+        dict | None: {'trade_count', 'profit_factor', 'total_return'} or None if not enough trades
+    """
+
+    if portfolio is None:
+        return None
+
+    trades = getattr(portfolio, 'trades', None)
+    if trades is None:
+        return None
+
+    # Get the profits/losses for all trades
+    pnl = trades.pnl.values  # ExitTrades supports .pnl to get PnL per trade
+
+    trade_count = len(pnl)
     if trade_count < min_trades:
         return None
 
-    stats = pf.stats()
-    # Safe .get() to avoid KeyErrors
-    pf_value = stats.get('Profit Factor', 0.0)
-    ret_value = stats.get('Total Return [%]', 0.0)
-
-    # Handle infinite profit factor (100% win rate)
-    if np.isinf(pf_value):
-        pf_value = 50.0 # Cap it
-
-    # The Secret Sauce Formula
-    robustness_score = pf_value * np.log(trade_count)
+    total_profit = pnl[pnl > 0].sum()
+    total_loss = pnl[pnl < 0].sum()
+    profit_factor = total_profit / abs(total_loss) if total_loss != 0 else float('inf')
+    total_return = pnl.sum()
 
     return {
-        "trade_count": trade_count,
-        "profit_factor": pf_value,
-        "total_return": ret_value,
-        "robustness_score": robustness_score
+        'trade_count': trade_count,
+        'profit_factor': profit_factor,
+        'total_return': total_return
     }
