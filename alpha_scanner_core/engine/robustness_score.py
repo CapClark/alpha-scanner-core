@@ -1,38 +1,34 @@
-# alpha_scanner_core/engine/robustness_score.py
+import numpy as np
+import pandas as pd
 
-def calculate_robustness_metrics(portfolio, min_trades: int = 2) -> dict | None:
+def calculate_robustness_metrics(pf, min_trades=5):
     """
-    Calculate robustness metrics from a VectorBT Portfolio object.
+    Calculates Profit Factor, Trade Count, and the custom Robustness Score.
+    """
+    trade_count = pf.trades.count()
     
-    Args:
-        portfolio: vectorbt Portfolio object
-        min_trades: minimum number of trades to calculate metrics
-
-    Returns:
-        dict | None: {'trade_count', 'profit_factor', 'total_return'} or None if not enough trades
-    """
-
-    if portfolio is None:
-        return None
-
-    trades = getattr(portfolio, 'trades', None)
-    if trades is None:
-        return None
-
-    # Get the profits/losses for all trades
-    pnl = trades.pnl.values  # ExitTrades supports .pnl to get PnL per trade
-
-    trade_count = len(pnl)
     if trade_count < min_trades:
         return None
-
-    total_profit = pnl[pnl > 0].sum()
-    total_loss = pnl[pnl < 0].sum()
-    profit_factor = total_profit / abs(total_loss) if total_loss != 0 else float('inf')
-    total_return = pnl.sum()
-
+    
+    stats = pf.stats()
+    # Safe .get() to avoid KeyErrors
+    # Note: vectorbt stat names can vary slightly by version, we try standard ones
+    total_return = stats.get('Total Return [%]', stats.get('Total Return', 0.0))
+    profit_factor = stats.get('Profit Factor', 0.0)
+    
+    # Handle infinite profit factor (100% win rate cases)
+    # We cap it to prevent math errors in scoring
+    if np.isinf(profit_factor) or np.isnan(profit_factor):
+        profit_factor = 100.0 if total_return > 0 else 0.0
+        
+    # --- THE ROBUSTNESS FORMULA ---
+    # Score = Profit Factor * log(Trade Count)
+    # We use log to reward frequency but with diminishing returns
+    robustness_score = profit_factor * np.log(trade_count)
+    
     return {
-        'trade_count': trade_count,
-        'profit_factor': profit_factor,
-        'total_return': total_return
+        "trade_count": int(trade_count),
+        "profit_factor": float(profit_factor),
+        "total_return": float(total_return),
+        "robustness_score": float(robustness_score)
     }
