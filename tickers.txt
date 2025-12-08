@@ -1,0 +1,115 @@
+TICKERS = [
+    # Mega-cap / Core Tech
+    'AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','AMD','INTC','IBM','ORCL',
+    'CSCO','ADBE','CRM','AVGO','QCOM','TXN','MU','AMAT','LRCX','ASML','NOW',
+    'SNOW','PANW','NET','CRWD','SHOP','PLTR','UBER','LYFT','SQ','PYPL','ZM',
+    'DDOG','OKTA','ZS','MDB','TWLO','DOCU','ROKU','FSLY','SNAP','BIDU','NTES',
+
+    # Major ETFs
+    'SPY','QQQ','DIA','IWM','VOO','VTI','VT','ARKK','SMH','SOXX','XLE','XLF',
+    'XLK','XLI','XLY','XLP','XLU','XLV','XLB','XLC','XLRE','IEMG','EEM','TLT',
+
+    # Financials
+    'JPM','BAC','WFC','GS','MS','C','BLK','SCHW','AXP','USB','PNC','COF','TROW',
+    'BK','STT','AIG','CB','TRV','MET','ALL','PRU','HIG','PGR','CME','ICE','NDAQ',
+
+    # Healthcare & Pharma
+    'JNJ','LLY','PFE','MRK','ABBV','BMY','TMO','ABT','DHR','AMGN','GILD','REGN',
+    'CVS','CI','HUM','UNH','ZTS','SYK','BSX','ISRG','EW','VRTX','BIIB','IQV',
+    'MTD','WAT','IDXX','HOLX','ALGN','NEOG',
+
+    # Energy & Materials
+    'XOM','CVX','SLB','COP','EOG','PXD','OXY','BP','SHEL','TOT','VLO','PSX','MPC',
+    'KMI','ENB','EPD','WMB','LNG','AM','OKE','FCX','NEM','GOLD','CLF','AA','STLD',
+    'X','APD','LIN','SHW','ECL','DD','MLM','VMC','NUE','ALB','LYB',
+
+    # Industrials
+    'BA','CAT','DE','LMT','RTX','NOC','GD','HON','GE','MMM','ETN','EMR','ITW',
+    'UPS','FDX','UNP','NSC','CSX','WM','RSG','JCI','TT','IR','PCAR','MAS','PNR',
+    'CMI','PH','DOV','GWW','XYL','ROK','AOS','FAST',
+
+    # Consumer / Retail
+    'WMT','HD','LOW','TGT','COST','NKE','SBUX','MCD','CMG','KO','PEP','MDLZ',
+    'KHC','CL','PG','PM','MO','UL','DEO','GIS','K','KR','DG','DLTR','CVNA',
+    'EBAY','ETSY','BJ','WBA','ROST','TJX','VFC','HSY','TSN','SJM','CPB',
+
+    # Communication Services & Media
+    'NFLX','DIS','CMCSA','TMUS','VZ','T','CHTR','WBD','FOX','FOXA','SPOT','TTWO',
+    'EA','PARA','LBRDK','LBTYA','LBTYK',
+
+    # Utilities
+    'NEE','DUK','SO','AEP','D','EXC','SRE','PEG','ED','XEL','WEC','ES','NRG',
+
+    # Real Estate
+    'PLD','AMT','CCI','EQIX','SPG','O','PSA','VTR','WELL','DLR','EXR','AVB',
+    'EQR','MAA','UDR','ARE','BXP','HST','IRM',
+
+    # Transportation / Travel
+    'DAL','AAL','UAL','LUV','ALK','JBLU','RYAAY','CCL','RCL','NCLH','MAR','HLT',
+    'ABNB','BKNG','EXPE','UBER','LYFT',
+
+    # Automotive
+    'GM','F','RIVN','LCID','NIO','LI','XPEV','TM','HMC','STLA',
+
+    # Semiconductors (Extended)
+    'TSM','ON','WOLF','ADI','MCHP','NXPI','SWKS','SLAB','MRVL','KLAC','TER',
+    'COHR','ACLS','UCTT','CRUS',
+
+    # Software (Extended)
+    'INTU','MSI','ADSK','ANSS','FICO','CDNS','SNPS','PAYC','APPF','BRKS',
+
+    # Cybersecurity (Extended)
+    'FTNT','CHKP','TENB','VRNS','SAIL','S','RPD','LFVN',
+
+    # Cloud / SaaS Mid-Cap
+    'BASE','ESTC','WK','FROG','HCP','PD','BOX','EGHT','RNG','APPN','AYX',
+
+    # Biotech Extended
+    'ALNY','SRPT','ICPT','EXEL','MDGL','BLUE','XLRN','IMMU','IONS','NVAX','HALO',
+    'NKTR','CRSP','EDIT','NTLA',
+
+    # Housing, Building, Industrials Extended
+    'LEN','DHI','PHM','TOL','NVR','MAS','HD','LOW','CSL','AWI','OC','MLR','ALG',
+
+    # Metals & Mining Extended
+    'TECK','HMY','SBSW','BTG','FSM','AG','PAAS','HL','GPL',
+
+    # Regional Banks (Sampling)
+    'ZION','FITB','KEY','RF','HBAN','SNV','SIVB','EWBC','CFR','MTB','BANC',
+
+    # Insurance Extended
+    'GL','PRI','RGA','UNM','LNC','AFL','CINF','HIG','TRUP',
+
+    # REIT Extended
+    'STOR','NNN','KIM','FRT','REG','MAC','BRX','WPG','EPR','CUZ','HPP',
+
+    # Industrials / Aerospace Extended
+    'AIR','HEI','SPR','HXL','TDG','TXT','ERJ','AER',
+
+    # Agriculture
+    'DE','ADM','BG','MOS','NTR','CF','AGCO','TSCO','FMC',
+
+    # Consumer Brands Extended
+    'UL','KO','PEP','MNST','CELH','WDFC','HAIN','PRGO','OTLY',
+
+    # Crypto-related Equities
+    'COIN','RIOT','MARA','MSTR','HUT','BITF','BTBT','NVDS','CLSK',
+
+    # Asset Managers / Brokers
+    'HOOD','IBKR','BEN','APO','KKR','CG','ARES','BAM','BX','TPG',
+
+    # Telecom Extended
+    'USM','TDS','LUMN','SAT','VSAT',
+
+    # Airlines / Logistics Extended
+    'KNX','SNDR','ODFL','TFII','SAIA','ZTO','YELL',
+
+    # International ADRs (Major)
+    'BABA','TCEHY','TM','SONY','DEO','UL','SAP','NVO','AZN','RIO','BHP','SNY',
+    'BP','SHEL','HSBC','UBS','BUD','NGG','TOT','LFC','CHL','CHU','CHN',
+
+    # Additional ETFs (Extended)
+    'SPYG','SPYV','VUG','VTV','IWF','IWD','IJH','IJR','MTUM','QUAL','USMV',
+    'SCHD','JEPI','JEPQ','VHT','VNQ','VOX','VDC','VCR','VAW','VPU','VEA','VWO',
+    'BND','HYG','LQD','SHY','IEF','IAU','GLD','SLV','UNG','USO'
+]
