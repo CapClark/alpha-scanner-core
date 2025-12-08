@@ -137,8 +137,11 @@ db_client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- NOTIFICATION SYSTEM ---
 def send_discord_log(message, color=0x00ff00):
-    """Sends a rich embed message to Discord"""
-    if not DISCORD_WEBHOOK_URL: return
+    """Sends a rich embed message to Discord with Error Handling"""
+    if not DISCORD_WEBHOOK_URL:
+        print("⚠️ Discord Notification SKIPPED: DISCORD_WEBHOOK_URL not found in environment.")
+        return
+
     try:
         payload = {
             "embeds": [{
@@ -147,9 +150,14 @@ def send_discord_log(message, color=0x00ff00):
                 "footer": {"text": "Strategy Grade Engine"}
             }]
         }
-        requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        
+        # Check for HTTP errors (e.g. 401 Unauthorized, 404 Not Found)
+        if response.status_code not in [200, 204]:
+            print(f"⚠️ Discord API Error {response.status_code}: {response.text}")
+            
     except Exception as e:
-        print(f"⚠️ Discord Error: {e}")
+        print(f"⚠️ Discord Connection Error: {e}")
 
 def process_results(pf, windows, strategy_prefix, ticker, all_results):
     """
@@ -224,6 +232,9 @@ def process_results(pf, windows, strategy_prefix, ticker, all_results):
 
 def run_parameter_sweep():
     # 1. Notify Start
+    if not DISCORD_WEBHOOK_URL:
+        print("ℹ️ Info: DISCORD_WEBHOOK_URL is missing. No notifications will be sent.")
+    
     start_msg = f"🚀 **Strategy Grade Engine Started**\nScanning {len(TICKERS)} assets..."
     print(start_msg)
     send_discord_log(start_msg, 0x3498db) # Blue Color
