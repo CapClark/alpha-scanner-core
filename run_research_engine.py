@@ -214,11 +214,13 @@ def run_parameter_sweep():
             
         close_price = df['Close'].squeeze() # Ensure Series format
 
-        # =============================================
-        # STRATEGY 1: RSI SWEEP (Window 5 to 40)
-        # =============================================
+        # ============================================================
+        # SECTION 1: RSI STRATEGY SWEEP
+        # ============================================================
         # Logic: Buy < 30, Sell > 70
-        rsi_windows = np.arange(5, 40, 2)
+        # Sweep: Windows 3 to 60 (Step 1) -> ~57 Strategies per ticker
+        print(f"   [{ticker}] Running RSI Sweep...")
+        rsi_windows = np.arange(3, 60, 1)
         rsi = vbt.RSI.run(close_price, window=rsi_windows)
         
         entries_rsi = rsi.rsi_below(30)
@@ -228,12 +230,15 @@ def run_parameter_sweep():
         
         process_results(pf_rsi, rsi_windows, "RSI Reversion", ticker, all_results)
 
-        # =============================================
-        # STRATEGY 2: BOLLINGER BANDS (Window 10 to 60)
-        # =============================================
+        # ============================================================
+        # SECTION 2: BOLLINGER BANDS SWEEP
+        # ============================================================
         # Logic: Buy < Lower Band, Sell > Upper Band
-        # Fix: Use axis=0 to broadcast the 1D price series against the 2D Bands DataFrame
-        bb_windows = np.arange(10, 60, 5)
+        # Sweep: Windows 5 to 60 (Step 1) -> ~55 Strategies per ticker
+        # Total strategies per ticker = ~112
+        print(f"   [{ticker}] Running BB Sweep...")
+        bb_windows = np.arange(5, 60, 1)
+        # alpha=2.0 is standard, could sweep this too but keeping fixed for now
         bb = vbt.BBANDS.run(close_price, window=bb_windows, alpha=2.0)
         
         entries_bb = bb.lower.gt(close_price, axis=0) # Lower Band > Price
@@ -247,7 +252,7 @@ def run_parameter_sweep():
     if all_results:
         # Sort by Robustness
         all_results.sort(key=lambda x: x['robustness_score'], reverse=True)
-        top_results = all_results[:100] # Top 100 only
+        top_results = all_results[:500] # Top 500 only (Expanded for Pro Tier)
         
         print(f"💾 Saving top {len(top_results)} robust strategies...")
         
@@ -259,7 +264,7 @@ def run_parameter_sweep():
         except Exception as e:
             print(f"❌ Database Error: {e}")
             
-        # Save CSV backup (excluding equity curve for readability)
+        # Save CSV backup
         csv_results = [{k: v for k, v in res.items() if k != 'equity_curve'} for res in top_results]
         pd.DataFrame(csv_results).to_csv("scan_results.csv", index=False)
         print("✅ Saved to scan_results.csv")
