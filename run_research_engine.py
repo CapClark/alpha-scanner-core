@@ -147,9 +147,30 @@ def process_results(pf, windows, strategy_prefix, ticker, all_results):
 
     for window in windows:
         # Vectorbt uses the parameter value as the index
-        trades = total_trades[window]
-        pf_value = profit_factors[window]
+        try:
+            trades = total_trades[window]
+            pf_value = profit_factors[window]
+            current_win_rate = win_rates[window]
+            current_return = returns[window]
+            equity_series = portfolio_values[window]
+        except KeyError:
+            continue
+
+        # FIX: Handle MultiIndex return (Series) vs Scalar
+        # BBANDS often returns a Series because it indexes by (window, alpha)
+        if isinstance(trades, (pd.Series, np.ndarray)):
+            trades = trades.iloc[0]
+        if isinstance(pf_value, (pd.Series, np.ndarray)):
+            pf_value = pf_value.iloc[0]
+        if isinstance(current_win_rate, (pd.Series, np.ndarray)):
+            current_win_rate = current_win_rate.iloc[0]
+        if isinstance(current_return, (pd.Series, np.ndarray)):
+            current_return = current_return.iloc[0]
         
+        # Handle Equity Series (if MultiIndex column, it returns a DataFrame)
+        if isinstance(equity_series, pd.DataFrame):
+            equity_series = equity_series.iloc[:, 0]
+
         # Filter: Minimum trades and valid Profit Factor
         if trades < 15 or np.isnan(pf_value): 
             continue
@@ -160,8 +181,6 @@ def process_results(pf, windows, strategy_prefix, ticker, all_results):
         if score > 3.0: # Minimum quality threshold
             
             # --- EXTRACT EQUITY CURVE ---
-            equity_series = portfolio_values[window]
-            
             # Downsample for database storage (max 200 points)
             if len(equity_series) > 200:
                 equity_series = equity_series.iloc[::len(equity_series)//200]
@@ -176,9 +195,9 @@ def process_results(pf, windows, strategy_prefix, ticker, all_results):
                 "strategy_name": f"{strategy_prefix} ({window})",
                 "robustness_score": round(float(score), 2),
                 "profit_factor": round(float(pf_value), 2),
-                "win_rate": round(float(win_rates[window] * 100), 1),
+                "win_rate": round(float(current_win_rate * 100), 1),
                 "total_trades": int(trades),
-                "net_return_pct": round(float(returns[window] * 100), 1),
+                "net_return_pct": round(float(current_return * 100), 1),
                 "equity_curve": equity_curve
             })
 
@@ -213,11 +232,12 @@ def run_parameter_sweep():
         # STRATEGY 2: BOLLINGER BANDS (Window 10 to 60)
         # =============================================
         # Logic: Buy < Lower Band, Sell > Upper Band
+        # Fix: Use axis=0 to broadcast the 1D price series against the 2D Bands DataFrame
         bb_windows = np.arange(10, 60, 5)
         bb = vbt.BBANDS.run(close_price, window=bb_windows, alpha=2.0)
         
-        entries_bb = close_price < bb.lower
-        exits_bb = close_price > bb.upper
+        entries_bb = bb.lower.gt(close_price, axis=0) # Lower Band > Price
+        exits_bb = bb.upper.lt(close_price, axis=0)   # Upper Band < Price
         
         pf_bb = vbt.Portfolio.from_signals(close_price, entries_bb, exits_bb, fees=0.001, freq='1D')
         
