@@ -5,6 +5,18 @@ from dotenv import load_dotenv
 # Load secrets from .env
 load_dotenv()
 
+# --- DEBUGGING BLOCK ---
+print("--- DEBUG: ENVIRONMENT VARIABLES DUMP ---")
+# Print ALL keys available to the system (but not values, for security)
+for key in os.environ.keys():
+    print(f"Key found: {key}")
+print("--- END DEBUG ---")
+# -----------------------
+
+url: str = os.environ.get("SUPABASE_URL")
+key: str = os.environ.get("SUPABASE_KEY")
+# ... rest of file ...
+
 url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
 
