@@ -1,5 +1,5 @@
 import os
-import requests # For Discord Notifications
+import requests
 import numpy as np
 import pandas as pd
 import vectorbt as vbt
@@ -15,7 +15,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
-# Expanded Universe (S&P 50 + High Beta Tech)
+# S&P 50 + Tech Universe
 TICKERS = [
     # Mega-cap / Core Tech
     'AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','AMD','INTC','IBM','ORCL',
@@ -137,35 +137,43 @@ db_client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- NOTIFICATION SYSTEM ---
 def send_discord_log(message, color=0x00ff00):
-    """Sends a rich embed message to Discord with Error Handling"""
-    if not DISCORD_WEBHOOK_URL:
-        print("⚠️ Discord Notification SKIPPED: DISCORD_WEBHOOK_URL not found in environment.")
-        return
-
+    if not DISCORD_WEBHOOK_URL: return
     try:
-        payload = {
-            "embeds": [{
-                "description": message,
-                "color": color,
-                "footer": {"text": "Strategy Grade Engine"}
-            }]
-        }
-        response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-        
-        # Check for HTTP errors (e.g. 401 Unauthorized, 404 Not Found)
-        if response.status_code not in [200, 204]:
-            print(f"⚠️ Discord API Error {response.status_code}: {response.text}")
-            
-    except Exception as e:
-        print(f"⚠️ Discord Connection Error: {e}")
+        requests.post(DISCORD_WEBHOOK_URL, json={
+            "embeds": [{"description": message, "color": color, "footer": {"text": "Strategy Grade Engine V2"}}]
+        })
+    except: pass
 
-def process_results(pf, windows, strategy_prefix, ticker, all_results):
+# --- MONTE CARLO SIMULATION (The "Science") ---
+def run_monte_carlo(close_price, entries, exits, real_return, simulations=50):
     """
-    Extracts metrics from VectorBT Portfolio, calculates Robustness Score,
-    and formats data for Supabase.
+    Shuffles the price returns 50 times to create 'fake' markets.
+    If the strategy performs well on fake data, it's just luck.
+    We want a strategy that beats 95% of random simulations.
     """
-    # Extract Vectorized Metrics
-    # These return Series indexed by the parameter window
+    # Calculate daily returns
+    returns = close_price.pct_change()
+    
+    better_than_random_count = 0
+    
+    for _ in range(simulations):
+        # Shuffle returns to break the time-series correlation
+        shuffled_returns = np.random.permutation(returns)
+        # Reconstruct price path
+        sim_price = pd.Series(shuffled_returns).add(1).cumprod() * close_price.iloc[0]
+        
+        # Run strategy on random data
+        pf_sim = vbt.Portfolio.from_signals(sim_price, entries, exits, fees=0.001, freq='1D')
+        sim_return = pf_sim.total_return()
+        
+        if real_return > sim_return:
+            better_than_random_count += 1
+            
+    # Calculate P-Value (Percentile)
+    # If 48/50 simulations were worse than real, score is 0.96 (High Confidence)
+    return better_than_random_count / simulations
+
+def process_results(pf, windows, strategy_prefix, ticker, all_results, close_price, entries_mask, exits_mask):
     total_trades = pf.trades.count()
     profit_factors = pf.trades.profit_factor()
     win_rates = pf.trades.win_rate()
@@ -174,142 +182,129 @@ def process_results(pf, windows, strategy_prefix, ticker, all_results):
 
     for window in windows:
         try:
-            # Access metric for specific window
-            # Note: VectorBT might return a Scalar or a Series depending on dimensions
             trades = total_trades[window]
             pf_value = profit_factors[window]
             current_win_rate = win_rates[window]
             current_return = returns[window]
             equity_series = portfolio_values[window]
-        except KeyError:
-            continue
+            
+            # Get specific entries/exits for Monte Carlo
+            # Note: VectorBT masks are 2D (Time x Window), extract the specific window column
+            specific_entries = entries_mask.iloc[:, list(windows).index(window)]
+            specific_exits = exits_mask.iloc[:, list(windows).index(window)]
+            
+        except KeyError: continue
 
-        # --- FIX: Handle MultiIndex return (Series) vs Scalar ---
-        # If VBT returns a Series (due to multiple parameters), take the first item
+        # Handle Scalar/Series conversion
         if isinstance(trades, (pd.Series, np.ndarray)): trades = trades.iloc[0]
         if isinstance(pf_value, (pd.Series, np.ndarray)): pf_value = pf_value.iloc[0]
         if isinstance(current_win_rate, (pd.Series, np.ndarray)): current_win_rate = current_win_rate.iloc[0]
         if isinstance(current_return, (pd.Series, np.ndarray)): current_return = current_return.iloc[0]
-        
-        # Handle Equity Series (if MultiIndex column, it returns a DataFrame)
-        if isinstance(equity_series, pd.DataFrame):
-            equity_series = equity_series.iloc[:, 0]
+        if isinstance(equity_series, pd.DataFrame): equity_series = equity_series.iloc[:, 0]
 
-        # --- FILTERING LOGIC ---
-        # 1. Minimum Trades: Need statistical significance (>= 15)
-        # 2. Valid PF: Must not be NaN or Inf
-        if trades < 15 or np.isnan(pf_value) or np.isinf(pf_value): 
-            continue
+        if trades < 15 or np.isnan(pf_value): continue
 
-        # --- ROBUSTNESS FORMULA ---
-        # Score = Profit Factor * ln(Total Trades)
+        # Base Robustness Score
         score = pf_value * np.log(trades)
         
-        # Threshold: Only keep strategies with Score > 3.0
-        if score > 3.0: 
+        # --- MONTE CARLO VALIDATION ---
+        # Only run expensive Monte Carlo on promising strategies (Score > 3.0)
+        if score > 3.0:
+            mc_confidence = run_monte_carlo(close_price, specific_entries, specific_exits, current_return)
             
-            # --- DATA REDUCTION (Equity Curve) ---
-            # We don't want to upload 1000 points per strategy to DB.
-            # Downsample to max 200 points for the frontend chart.
-            if len(equity_series) > 200:
-                equity_series = equity_series.iloc[::len(equity_series)//200]
+            # Penalize score if it fails Monte Carlo (e.g. if confidence is < 0.9, slash the score)
+            if mc_confidence < 0.90:
+                score = score * 0.5 # Heavy penalty for "Lucky" strategies
             
-            equity_curve = [
-                {"date": str(idx.date()), "value": round(val, 2)}
-                for idx, val in equity_series.items()
-            ]
-            
-            all_results.append({
-                "symbol": ticker,
-                "strategy_name": f"{strategy_prefix} ({window})",
-                "robustness_score": round(float(score), 2),
-                "profit_factor": round(float(pf_value), 2),
-                "win_rate": round(float(current_win_rate * 100), 1),
-                "total_trades": int(trades),
-                "net_return_pct": round(float(current_return * 100), 1),
-                "equity_curve": equity_curve
-            })
+            if score > 3.0: # Check if it still passes after penalty
+                if len(equity_series) > 200: equity_series = equity_series.iloc[::len(equity_series)//200]
+                equity_curve = [{"date": str(idx.date()), "value": round(val, 2)} for idx, val in equity_series.items()]
+                
+                all_results.append({
+                    "symbol": ticker,
+                    "strategy_name": f"{strategy_prefix} ({window})",
+                    "robustness_score": round(float(score), 2),
+                    "profit_factor": round(float(pf_value), 2),
+                    "win_rate": round(float(current_win_rate * 100), 1),
+                    "total_trades": int(trades),
+                    "net_return_pct": round(float(current_return * 100), 1),
+                    "equity_curve": equity_curve
+                })
 
 def run_parameter_sweep():
-    # 1. Notify Start
-    if not DISCORD_WEBHOOK_URL:
-        print("ℹ️ Info: DISCORD_WEBHOOK_URL is missing. No notifications will be sent.")
-    
-    start_msg = f"🚀 **Strategy Grade Engine Started**\nScanning {len(TICKERS)} assets..."
+    start_msg = f"🚀 **Strategy Grade V2 Started**\nScanning {len(TICKERS)} assets with Shorting & Monte Carlo..."
     print(start_msg)
-    send_discord_log(start_msg, 0x3498db) # Blue Color
+    send_discord_log(start_msg, 0x3498db)
     
     all_results = []
 
     for ticker in TICKERS:
         try:
-            # 2. Fetch Data (Cached)
             df = fetch_stock_data(ticker)
             if df is None or df.empty: continue
-            
-            # Convert to Series for VectorBT
             close_price = df['Close'].squeeze()
 
             # ============================================================
-            # SECTION 1: RSI STRATEGY SWEEP
+            # STRATEGY 1: RSI (Long & Short)
             # ============================================================
-            # Logic: Buy < 30, Sell > 70
-            # Sweep: Windows 3 to 60 (Step 1)
-            # print(f"   [{ticker}] Running RSI Sweep...")
             rsi_windows = np.arange(3, 60, 1)
             rsi = vbt.RSI.run(close_price, window=rsi_windows)
             
-            entries_rsi = rsi.rsi_below(30)
-            exits_rsi = rsi.rsi_above(70)
-            
-            pf_rsi = vbt.Portfolio.from_signals(close_price, entries_rsi, exits_rsi, fees=0.001, freq='1D')
-            process_results(pf_rsi, rsi_windows, "RSI Reversion", ticker, all_results)
+            # LONG Logic: Buy < 30, Sell > 70
+            l_entries = rsi.rsi_below(30)
+            l_exits = rsi.rsi_above(70)
+            pf_long = vbt.Portfolio.from_signals(close_price, l_entries, l_exits, fees=0.001, freq='1D')
+            process_results(pf_long, rsi_windows, "RSI Long", ticker, all_results, close_price, l_entries, l_exits)
+
+            # SHORT Logic: Sell > 70, Cover < 30
+            # Note: We use 'short_entries' and 'short_exits' parameters
+            s_entries = rsi.rsi_above(70)
+            s_exits = rsi.rsi_below(30)
+            pf_short = vbt.Portfolio.from_signals(close_price, short_entries=s_entries, short_exits=s_exits, fees=0.001, freq='1D')
+            process_results(pf_short, rsi_windows, "RSI Short", ticker, all_results, close_price, s_entries, s_exits)
 
             # ============================================================
-            # SECTION 2: BOLLINGER BANDS SWEEP
+            # STRATEGY 2: BOLLINGER (Long & Short)
             # ============================================================
-            # Logic: Buy < Lower Band, Sell > Upper Band
-            # Sweep: Windows 5 to 60 (Step 1)
-            # print(f"   [{ticker}] Running BB Sweep...")
             bb_windows = np.arange(5, 60, 1)
             bb = vbt.BBANDS.run(close_price, window=bb_windows, alpha=2.0)
             
-            entries_bb = bb.lower.gt(close_price, axis=0) # Lower Band > Price
-            exits_bb = bb.upper.lt(close_price, axis=0)   # Upper Band < Price
-            
-            pf_bb = vbt.Portfolio.from_signals(close_price, entries_bb, exits_bb, fees=0.001, freq='1D')
-            process_results(pf_bb, bb_windows, "BB Reversion", ticker, all_results)
+            # LONG
+            bb_l_entries = bb.lower.gt(close_price, axis=0)
+            bb_l_exits = bb.upper.lt(close_price, axis=0)
+            pf_bb_long = vbt.Portfolio.from_signals(close_price, bb_l_entries, bb_l_exits, fees=0.001, freq='1D')
+            process_results(pf_bb_long, bb_windows, "BB Long", ticker, all_results, close_price, bb_l_entries, bb_l_exits)
+
+            # SHORT
+            bb_s_entries = bb.upper.lt(close_price, axis=0)
+            bb_s_exits = bb.lower.gt(close_price, axis=0)
+            pf_bb_short = vbt.Portfolio.from_signals(close_price, short_entries=bb_s_entries, short_exits=bb_s_exits, fees=0.001, freq='1D')
+            process_results(pf_bb_short, bb_windows, "BB Short", ticker, all_results, close_price, bb_s_entries, bb_s_exits)
             
         except Exception as e:
             print(f"⚠️ Error on {ticker}: {e}")
 
     # --- UPLOAD ---
     if all_results:
-        # Sort by Robustness
         all_results.sort(key=lambda x: x['robustness_score'], reverse=True)
-        top_results = all_results[:500] # Cap at Top 500
+        top_results = all_results[:500]
         
         try:
-            # Atomic Update: Delete old high-scores, Insert new ones
             db_client.table("strategy_leaderboard").delete().neq("robustness_score", -1).execute()
             db_client.table("strategy_leaderboard").insert(top_results).execute()
             
-            success_msg = f"✅ **Scan Complete**\nFound {len(all_results)} valid strategies.\nTop {len(top_results)} uploaded to Leaderboard."
+            success_msg = f"✅ **Scan Complete**\nTop {len(top_results)} strategies uploaded.\nMonte Carlo Validation Applied."
             print(success_msg)
-            send_discord_log(success_msg, 0x2ecc71) # Green Color
+            send_discord_log(success_msg, 0x2ecc71)
             
         except Exception as e:
             error_msg = f"❌ Database Upload Error: {e}"
             print(error_msg)
-            send_discord_log(error_msg, 0xe74c3c) # Red Color
-            
-        # Local Backup
-        csv_results = [{k: v for k, v in res.items() if k != 'equity_curve'} for res in top_results]
-        pd.DataFrame(csv_results).to_csv("scan_results.csv", index=False)
+            send_discord_log(error_msg, 0xe74c3c)
     else:
         msg = "⚠️ Scan Complete but NO robust strategies found."
         print(msg)
-        send_discord_log(msg, 0xf1c40f) # Yellow Color
+        send_discord_log(msg, 0xf1c40f)
 
 if __name__ == "__main__":
     run_parameter_sweep()
