@@ -16,7 +16,6 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 # Expanded Universe (S&P 50 + High Beta Tech)
-# You can expand this list to 500+ if you have the data
 TICKERS = [
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK.B', 'TSM', 'UNH',
     'JNJ', 'JPM', 'XOM', 'V', 'PG', 'MA', 'AVGO', 'HD', 'CVX', 'MRK',
@@ -52,7 +51,6 @@ def run_monte_carlo(close_price, entries, exits, real_return, simulations=50):
         shuffled_returns = np.random.permutation(returns)
         sim_price = pd.Series(shuffled_returns).add(1).cumprod() * close_price.iloc[0]
         
-        # Use simple signals for speed in MC
         pf_sim = vbt.Portfolio.from_signals(sim_price, entries, exits, fees=0.001, freq='1D')
         sim_return = pf_sim.total_return()
         
@@ -68,10 +66,15 @@ def sanitize_float(val):
     return float(val)
 
 def process_results(pf, windows, strategy_prefix, ticker, all_results, close_price, entries_mask, exits_mask):
+    # Extract Vectorized Metrics
     total_trades = pf.trades.count()
     profit_factors = pf.trades.profit_factor()
     win_rates = pf.trades.win_rate()
     returns = pf.total_return()
+    # Sortino & Drawdown for Advanced Scoring
+    sortino_ratios = pf.sortino_ratio()
+    max_drawdowns = pf.max_drawdown()
+    
     portfolio_values = pf.value()
 
     for window in windows:
@@ -80,6 +83,11 @@ def process_results(pf, windows, strategy_prefix, ticker, all_results, close_pri
             pf_value = profit_factors[window]
             current_win_rate = win_rates[window]
             current_return = returns[window]
+            
+            # Advanced Metrics
+            current_sortino = sortino_ratios[window]
+            current_max_dd = max_drawdowns[window]
+            
             equity_series = portfolio_values[window]
             
             specific_entries = entries_mask.iloc[:, list(windows).index(window)]
@@ -92,31 +100,47 @@ def process_results(pf, windows, strategy_prefix, ticker, all_results, close_pri
         if isinstance(pf_value, (pd.Series, np.ndarray)): pf_value = pf_value.iloc[0]
         if isinstance(current_win_rate, (pd.Series, np.ndarray)): current_win_rate = current_win_rate.iloc[0]
         if isinstance(current_return, (pd.Series, np.ndarray)): current_return = current_return.iloc[0]
+        if isinstance(current_sortino, (pd.Series, np.ndarray)): current_sortino = current_sortino.iloc[0]
+        if isinstance(current_max_dd, (pd.Series, np.ndarray)): current_max_dd = current_max_dd.iloc[0]
         if isinstance(equity_series, pd.DataFrame): equity_series = equity_series.iloc[:, 0]
 
-        # Sanitize Metrics immediately
+        # Sanitize Metrics
         trades = int(sanitize_float(trades))
         pf_value = sanitize_float(pf_value)
         current_win_rate = sanitize_float(current_win_rate)
         current_return = sanitize_float(current_return)
+        current_sortino = sanitize_float(current_sortino)
+        current_max_dd = sanitize_float(current_max_dd)
 
-        # Filtering
+        # Basic Filter
         if trades < 15 or pf_value <= 0: continue
 
-        # Robustness Score
-        score = pf_value * np.log(trades)
+        # --- QUANTUM SCORING FORMULA ---
+        # Score = Profit Factor * Sortino * (1 - MaxDD) * log(Trades)
+        # This rewards high risk-adjusted returns and penalizes drawdown heavily.
         
-        if score > 2.0: # Lowered threshold to ensure data populates
-            # Monte Carlo
+        # 1. Clean Sortino (remove negatives, they aren't robust)
+        clean_sortino = max(0, current_sortino)
+        
+        # 2. Drawdown Factor (1.0 = No Drawdown, 0.5 = 50% Drawdown)
+        # We ensure it doesn't go below 0.1 to avoid killing decent strategies entirely
+        dd_factor = max(0.1, 1.0 - abs(current_max_dd))
+        
+        # 3. Calculation
+        score = pf_value * clean_sortino * dd_factor * np.log(trades)
+        
+        # Threshold: Adjusted for new formula (higher scores expected)
+        # A score > 5.0 is now considered "Robust"
+        if score > 5.0:
+            
+            # Monte Carlo Check
             mc_confidence = run_monte_carlo(close_price, specific_entries, specific_exits, current_return)
             if mc_confidence < 0.90:
                 score = score * 0.5 
             
-            if score > 2.0: 
-                # Downsample Equity Curve
+            if score > 5.0: 
                 if len(equity_series) > 200: equity_series = equity_series.iloc[::len(equity_series)//200]
                 
-                # Sanitize Equity Curve Data
                 equity_curve = []
                 for idx, val in equity_series.items():
                     clean_val = sanitize_float(val)
@@ -134,7 +158,7 @@ def process_results(pf, windows, strategy_prefix, ticker, all_results, close_pri
                 })
 
 def run_parameter_sweep():
-    start_msg = f"🚀 **Strategy Grade V2 Started**\nScanning {len(TICKERS)} assets with Shorting & Monte Carlo..."
+    start_msg = f"🚀 **Strategy Grade V3 (Quantum)**\nScanning {len(TICKERS)} assets..."
     print(start_msg)
     send_discord_log(start_msg, 0x3498db)
     
@@ -146,33 +170,29 @@ def run_parameter_sweep():
             if df is None or df.empty: continue
             close_price = df['Close'].squeeze()
 
-            # --- STRATEGY 1: RSI ---
+            # --- RSI (Long/Short) ---
             rsi_windows = np.arange(3, 60, 1)
             rsi = vbt.RSI.run(close_price, window=rsi_windows)
             
-            # Long
             l_entries = rsi.rsi_below(30)
             l_exits = rsi.rsi_above(70)
             pf_long = vbt.Portfolio.from_signals(close_price, l_entries, l_exits, fees=0.001, freq='1D')
             process_results(pf_long, rsi_windows, "RSI Long", ticker, all_results, close_price, l_entries, l_exits)
 
-            # Short
             s_entries = rsi.rsi_above(70)
             s_exits = rsi.rsi_below(30)
             pf_short = vbt.Portfolio.from_signals(close_price, short_entries=s_entries, short_exits=s_exits, fees=0.001, freq='1D')
             process_results(pf_short, rsi_windows, "RSI Short", ticker, all_results, close_price, s_entries, s_exits)
 
-            # --- STRATEGY 2: BOLLINGER ---
+            # --- BB (Long/Short) ---
             bb_windows = np.arange(5, 60, 1)
             bb = vbt.BBANDS.run(close_price, window=bb_windows, alpha=2.0)
             
-            # Long
             bb_l_entries = bb.lower.gt(close_price, axis=0)
             bb_l_exits = bb.upper.lt(close_price, axis=0)
             pf_bb_long = vbt.Portfolio.from_signals(close_price, bb_l_entries, bb_l_exits, fees=0.001, freq='1D')
             process_results(pf_bb_long, bb_windows, "BB Long", ticker, all_results, close_price, bb_l_entries, bb_l_exits)
 
-            # Short
             bb_s_entries = bb.upper.lt(close_price, axis=0)
             bb_s_exits = bb.lower.gt(close_price, axis=0)
             pf_bb_short = vbt.Portfolio.from_signals(close_price, short_entries=bb_s_entries, short_exits=bb_s_exits, fees=0.001, freq='1D')
@@ -181,23 +201,15 @@ def run_parameter_sweep():
         except Exception as e:
             print(f"⚠️ Error on {ticker}: {e}")
 
-    # --- UPLOAD ---
     if all_results:
-        # Sort by Robustness
         all_results.sort(key=lambda x: x['robustness_score'], reverse=True)
         top_results = all_results[:500]
         
-        print(f"✅ Found {len(all_results)} strategies. Uploading Top {len(top_results)}...")
-        
         try:
-            # 1. Clear Old Data
             db_client.table("strategy_leaderboard").delete().neq("robustness_score", -1).execute()
-            
-            # 2. Batch Upload (Chunk size 100)
             chunk_size = 100
             for i in range(0, len(top_results), chunk_size):
                 chunk = top_results[i:i + chunk_size]
-                print(f"   Uploading batch {i} to {i + len(chunk)}...")
                 db_client.table("strategy_leaderboard").insert(chunk).execute()
             
             success_msg = f"✅ **Scan Complete**\nTop {len(top_results)} strategies uploaded."
@@ -212,9 +224,7 @@ def run_parameter_sweep():
         csv_results = [{k: v for k, v in res.items() if k != 'equity_curve'} for res in top_results]
         pd.DataFrame(csv_results).to_csv("scan_results.csv", index=False)
     else:
-        msg = "⚠️ Scan Complete but NO robust strategies found."
-        print(msg)
-        send_discord_log(msg, 0xf1c40f)
+        print("⚠️ Scan Complete but NO robust strategies found.")
 
 if __name__ == "__main__":
     run_parameter_sweep()
