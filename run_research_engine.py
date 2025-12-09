@@ -18,121 +18,14 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 # Expanded Universe (S&P 50 + High Beta Tech)
 # You can expand this list to 500+ if you have the data
 TICKERS = [
-    # Mega-cap / Core Tech
-    'AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','AMD','INTC','IBM','ORCL',
-    'CSCO','ADBE','CRM','AVGO','QCOM','TXN','MU','AMAT','LRCX','ASML','NOW',
-    'SNOW','PANW','NET','CRWD','SHOP','PLTR','UBER','LYFT','SQ','PYPL','ZM',
-    'DDOG','OKTA','ZS','MDB','TWLO','DOCU','ROKU','FSLY','SNAP','BIDU','NTES',
-
-    # Major ETFs
-    'SPY','QQQ','DIA','IWM','VOO','VTI','VT','ARKK','SMH','SOXX','XLE','XLF',
-    'XLK','XLI','XLY','XLP','XLU','XLV','XLB','XLC','XLRE','IEMG','EEM','TLT',
-
-    # Financials
-    'JPM','BAC','WFC','GS','MS','C','BLK','SCHW','AXP','USB','PNC','COF','TROW',
-    'BK','STT','AIG','CB','TRV','MET','ALL','PRU','HIG','PGR','CME','ICE','NDAQ',
-
-    # Healthcare & Pharma
-    'JNJ','LLY','PFE','MRK','ABBV','BMY','TMO','ABT','DHR','AMGN','GILD','REGN',
-    'CVS','CI','HUM','UNH','ZTS','SYK','BSX','ISRG','EW','VRTX','BIIB','IQV',
-    'MTD','WAT','IDXX','HOLX','ALGN','NEOG',
-
-    # Energy & Materials
-    'XOM','CVX','SLB','COP','EOG','PXD','OXY','BP','SHEL','TOT','VLO','PSX','MPC',
-    'KMI','ENB','EPD','WMB','LNG','AM','OKE','FCX','NEM','GOLD','CLF','AA','STLD',
-    'X','APD','LIN','SHW','ECL','DD','MLM','VMC','NUE','ALB','LYB',
-
-    # Industrials
-    'BA','CAT','DE','LMT','RTX','NOC','GD','HON','GE','MMM','ETN','EMR','ITW',
-    'UPS','FDX','UNP','NSC','CSX','WM','RSG','JCI','TT','IR','PCAR','MAS','PNR',
-    'CMI','PH','DOV','GWW','XYL','ROK','AOS','FAST',
-
-    # Consumer / Retail
-    'WMT','HD','LOW','TGT','COST','NKE','SBUX','MCD','CMG','KO','PEP','MDLZ',
-    'KHC','CL','PG','PM','MO','UL','DEO','GIS','K','KR','DG','DLTR','CVNA',
-    'EBAY','ETSY','BJ','WBA','ROST','TJX','VFC','HSY','TSN','SJM','CPB',
-
-    # Communication Services & Media
-    'NFLX','DIS','CMCSA','TMUS','VZ','T','CHTR','WBD','FOX','FOXA','SPOT','TTWO',
-    'EA','PARA','LBRDK','LBTYA','LBTYK',
-
-    # Utilities
-    'NEE','DUK','SO','AEP','D','EXC','SRE','PEG','ED','XEL','WEC','ES','NRG',
-
-    # Real Estate
-    'PLD','AMT','CCI','EQIX','SPG','O','PSA','VTR','WELL','DLR','EXR','AVB',
-    'EQR','MAA','UDR','ARE','BXP','HST','IRM',
-
-    # Transportation / Travel
-    'DAL','AAL','UAL','LUV','ALK','JBLU','RYAAY','CCL','RCL','NCLH','MAR','HLT',
-    'ABNB','BKNG','EXPE','UBER','LYFT',
-
-    # Automotive
-    'GM','F','RIVN','LCID','NIO','LI','XPEV','TM','HMC','STLA',
-
-    # Semiconductors (Extended)
-    'TSM','ON','WOLF','ADI','MCHP','NXPI','SWKS','SLAB','MRVL','KLAC','TER',
-    'COHR','ACLS','UCTT','CRUS',
-
-    # Software (Extended)
-    'INTU','MSI','ADSK','ANSS','FICO','CDNS','SNPS','PAYC','APPF','BRKS',
-
-    # Cybersecurity (Extended)
-    'FTNT','CHKP','TENB','VRNS','SAIL','S','RPD','LFVN',
-
-    # Cloud / SaaS Mid-Cap
-    'BASE','ESTC','WK','FROG','HCP','PD','BOX','EGHT','RNG','APPN','AYX',
-
-    # Biotech Extended
-    'ALNY','SRPT','ICPT','EXEL','MDGL','BLUE','XLRN','IMMU','IONS','NVAX','HALO',
-    'NKTR','CRSP','EDIT','NTLA',
-
-    # Housing, Building, Industrials Extended
-    'LEN','DHI','PHM','TOL','NVR','MAS','HD','LOW','CSL','AWI','OC','MLR','ALG',
-
-    # Metals & Mining Extended
-    'TECK','HMY','SBSW','BTG','FSM','AG','PAAS','HL','GPL',
-
-    # Regional Banks (Sampling)
-    'ZION','FITB','KEY','RF','HBAN','SNV','SIVB','EWBC','CFR','MTB','BANC',
-
-    # Insurance Extended
-    'GL','PRI','RGA','UNM','LNC','AFL','CINF','HIG','TRUP',
-
-    # REIT Extended
-    'STOR','NNN','KIM','FRT','REG','MAC','BRX','WPG','EPR','CUZ','HPP',
-
-    # Industrials / Aerospace Extended
-    'AIR','HEI','SPR','HXL','TDG','TXT','ERJ','AER',
-
-    # Agriculture
-    'DE','ADM','BG','MOS','NTR','CF','AGCO','TSCO','FMC',
-
-    # Consumer Brands Extended
-    'UL','KO','PEP','MNST','CELH','WDFC','HAIN','PRGO','OTLY',
-
-    # Crypto-related Equities
-    'COIN','RIOT','MARA','MSTR','HUT','BITF','BTBT','NVDS','CLSK',
-
-    # Asset Managers / Brokers
-    'HOOD','IBKR','BEN','APO','KKR','CG','ARES','BAM','BX','TPG',
-
-    # Telecom Extended
-    'USM','TDS','LUMN','SAT','VSAT',
-
-    # Airlines / Logistics Extended
-    'KNX','SNDR','ODFL','TFII','SAIA','ZTO','YELL',
-
-    # International ADRs (Major)
-    'BABA','TCEHY','TM','SONY','DEO','UL','SAP','NVO','AZN','RIO','BHP','SNY',
-    'BP','SHEL','HSBC','UBS','BUD','NGG','TOT','LFC','CHL','CHU','CHN',
-
-    # Additional ETFs (Extended)
-    'SPYG','SPYV','VUG','VTV','IWF','IWD','IJH','IJR','MTUM','QUAL','USMV',
-    'SCHD','JEPI','JEPQ','VHT','VNQ','VOX','VDC','VCR','VAW','VPU','VEA','VWO',
-    'BND','HYG','LQD','SHY','IEF','IAU','GLD','SLV','UNG','USO'
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK.B', 'TSM', 'UNH',
+    'JNJ', 'JPM', 'XOM', 'V', 'PG', 'MA', 'AVGO', 'HD', 'CVX', 'MRK',
+    'ABBV', 'PEP', 'KO', 'LLY', 'BAC', 'COST', 'TMO', 'DIS', 'MCD', 'CSCO',
+    'ABT', 'DHR', 'ACN', 'VZ', 'NEE', 'WMT', 'BA', 'LIN', 'TXN', 'ADBE',
+    'PM', 'NKE', 'RTX', 'UNP', 'UPS', 'PFE', 'LOW', 'INTC', 'HON', 'AMD',
+    'QCOM', 'IBM', 'SPGI', 'CAT', 'GS', 'GE', 'DE', 'MS', 'INTU', 'BKNG',
+    'BLK', 'AMAT', 'NOW', 'PYPL', 'ADP', 'MDLZ', 'GILD', 'CVS', 'ISRG', 'LMT'
 ]
-
 
 db_client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -213,13 +106,13 @@ def process_results(pf, windows, strategy_prefix, ticker, all_results, close_pri
         # Robustness Score
         score = pf_value * np.log(trades)
         
-        if score > 3.0:
+        if score > 2.0: # Lowered threshold to ensure data populates
             # Monte Carlo
             mc_confidence = run_monte_carlo(close_price, specific_entries, specific_exits, current_return)
             if mc_confidence < 0.90:
                 score = score * 0.5 
             
-            if score > 3.0: 
+            if score > 2.0: 
                 # Downsample Equity Curve
                 if len(equity_series) > 200: equity_series = equity_series.iloc[::len(equity_series)//200]
                 
@@ -290,14 +183,24 @@ def run_parameter_sweep():
 
     # --- UPLOAD ---
     if all_results:
+        # Sort by Robustness
         all_results.sort(key=lambda x: x['robustness_score'], reverse=True)
         top_results = all_results[:500]
         
+        print(f"✅ Found {len(all_results)} strategies. Uploading Top {len(top_results)}...")
+        
         try:
+            # 1. Clear Old Data
             db_client.table("strategy_leaderboard").delete().neq("robustness_score", -1).execute()
-            db_client.table("strategy_leaderboard").insert(top_results).execute()
             
-            success_msg = f"✅ **Scan Complete**\nTop {len(top_results)} strategies uploaded.\nMonte Carlo Validation Applied."
+            # 2. Batch Upload (Chunk size 100)
+            chunk_size = 100
+            for i in range(0, len(top_results), chunk_size):
+                chunk = top_results[i:i + chunk_size]
+                print(f"   Uploading batch {i} to {i + len(chunk)}...")
+                db_client.table("strategy_leaderboard").insert(chunk).execute()
+            
+            success_msg = f"✅ **Scan Complete**\nTop {len(top_results)} strategies uploaded."
             print(success_msg)
             send_discord_log(success_msg, 0x2ecc71)
             
