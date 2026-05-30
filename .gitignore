@@ -5,12 +5,19 @@ __pycache__/
 # Ignore Virtual Environment folder
 venv/
 env/
-.env
+
+# Ignore ALL env / secret files (.env, .env.env, .env.local, ...)
+.env*
+*.env
 
 # Ignore Data files (Never upload huge CSVs)
 *.csv
 *.parquet
 *.json
+
+# Ignore generated data + logs
+datasets/
+*.log
 
 # Ignore Mac system files
 .DS_Store
