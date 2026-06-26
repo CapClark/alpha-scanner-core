@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
+    LimitOrderRequest,
     StopLossRequest,
     TakeProfitRequest,
     GetOrdersRequest,
@@ -144,12 +145,18 @@ def place_buy(trading: TradingClient, data: StockHistoricalDataClient,
         return True
 
     try:
-        # OTO (one-triggers-other): market entry + stop loss only, no take profit required
-        order = MarketOrderRequest(
+        # OTO (one-triggers-other): marketable-limit entry + stop loss only.
+        # GTC so the stop leg PERSISTS across days. Market orders can't be GTC on
+        # Alpaca, so a limit a hair (0.5%) above price fills like a market order
+        # while keeping the protective stop alive (a DAY OTO expires the stop at
+        # the close of the entry day, leaving the position naked from day 2).
+        limit_entry = round(price * 1.005, 2)
+        order = LimitOrderRequest(
             symbol=ticker,
             qty=qty,
             side=OrderSide.BUY,
-            time_in_force=TimeInForce.DAY,
+            limit_price=limit_entry,
+            time_in_force=TimeInForce.GTC,
             order_class=OrderClass.OTO,
             stop_loss=StopLossRequest(stop_price=stop_price),
         )

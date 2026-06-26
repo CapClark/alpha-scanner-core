@@ -1,0 +1,15 @@
+# strategy_grade.io daily executor — installed by deploy/setup_host.sh.
+# Times are in the host's local zone, which setup sets to America/New_York,
+# so these fire at the US market open and the OS shifts them across DST.
+# __BASE__ is replaced with the repo base dir at install time.
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# Alpha Scanner (mean-reversion) — 9:35 ET, just after the open
+35 9 * * 1-5 cd __BASE__/alpha-scanner-core && ./run_daily.sh >> datasets/cron.log 2>&1
+
+# CANSLIM (breakout, S&P 500 RS>=90 + TP8%) — 9:40 ET
+40 9 * * 1-5 cd __BASE__/canslim-core && ./run_daily.sh --sp500 >> datasets/cron.log 2>&1
+
+# Weekly research (--full --weekly: WRDS + 1.2G ohlcv_full + model retrain) stays on
+# the laptop for now. Phase 2: add it here once the deep cache + WRDS are on the host.
