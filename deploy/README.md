@@ -48,6 +48,23 @@ stays on the laptop until Phase 2.
 | alpha daily | 9:35 ET, Mon–Fri | `run_daily.sh` |
 | canslim daily | 9:40 ET, Mon–Fri | `run_daily.sh --sp500` |
 
+## Resilience — so it can't silently die again
+Two failures hid for weeks: execution stopped (timezone/sleep) and stops expired
+(naked positions). The always-on host fixes the first cause; these add the alarms:
+
+1. **Dead-man's-switch heartbeat.** Create a free check at https://healthchecks.io
+   (period 1 day, grace ~2h), then add its ping URL to `alpha-scanner-core/.env`:
+   ```
+   HEALTHCHECK_URL=https://hc-ping.com/<your-uuid>
+   ```
+   `run_daily.sh` pings it on success and `…/fail` on any failed step. If a run is
+   missed or fails, healthchecks.io emails/SMSes you within the grace window —
+   instead of finding out two weeks later. (Give the canslim job its own check.)
+2. **Stop-loss guardrail.** `guard_stops.py --rearm` runs as the last daily step:
+   for every open position it confirms a resting GTC stop exists and re-places one
+   at entry−5% if not. A naked position makes the run exit non-zero → heartbeat
+   `/fail` → you get alerted. Run it ad hoc any time: `python3 guard_stops.py`.
+
 ## Health check
 `tail -f ~/strategy_grade.io/*/datasets/cron.log` after a fire, and the Alpaca
 dashboards. Each `run_daily.sh` also writes `datasets/daily_<date>.log`.
