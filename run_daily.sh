@@ -9,8 +9,9 @@
 
 cd "$(dirname "$0")"
 
-# Use absolute path to avoid symlink resolution issues under cron
-PYTHON=/Users/kenpeeranat/Documents/strategy_grade.io/alpha-scanner-core/venv/bin/python3.13
+# Portable venv python — works on the laptop and the cloud host alike.
+# The cd above already moved us into the script dir, so pwd is its absolute path.
+PYTHON="$(pwd)/venv/bin/python"
 
 SIGNALS_ONLY=false
 if [[ "$1" == "--signals-only" ]]; then
