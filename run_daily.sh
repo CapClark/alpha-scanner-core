@@ -26,6 +26,30 @@ if [[ "$1" == "--signals-only" ]]; then
     SIGNALS_ONLY=true
 fi
 
+# --- Market-open gate (timezone-proof) --------------------------------------
+# launchd fires this every ~30 min; whether we actually run is decided by Alpaca's
+# market clock, NOT the host clock — so it runs once, just after the real US open,
+# regardless of any system/launchd timezone drift. Manual --signals-only bypasses it.
+if [ "$SIGNALS_ONLY" != true ]; then
+    GATE="$("$PYTHON" - <<'PYEOF' 2>/dev/null || echo "SKIP error"
+import os, datetime
+from zoneinfo import ZoneInfo
+from dotenv import load_dotenv
+load_dotenv(".env")
+from alpaca.trading.client import TradingClient
+c = TradingClient(os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY"), paper=True).get_clock()
+et = c.timestamp.astimezone(ZoneInfo("America/New_York"))
+ok = c.is_open and datetime.time(9, 30) <= et.time() <= datetime.time(10, 30)
+print(("GO" if ok else "SKIP"), et.strftime("%Y-%m-%d"))
+PYEOF
+)"
+    if [ "${GATE%% *}" != "GO" ] || [ -f "datasets/.ran_${GATE##* }" ]; then
+        exit 0            # outside the post-open window (or already ran today) — skip quietly
+    fi
+    rm -f datasets/.ran_*             # claim today up-front so overlapping fires can't double-run
+    touch "datasets/.ran_${GATE##* }"
+fi
+
 LOG="datasets/daily_$(date +%Y-%m-%d).log"
 
 echo "======================================" | tee "$LOG"
