@@ -203,7 +203,7 @@ def compute_signals(adj_close: pd.Series, strategy: str) -> tuple[pd.Series, pd.
 
 class Position:
     __slots__ = ("ticker", "strategy", "permno", "entry_date", "entry_price", "qty",
-                 "stop_price", "value", "pending_exit")
+                 "stop_price", "value", "pending_exit", "pending_reason", "days_held")
 
     def __init__(self, ticker, strategy, permno, entry_date, entry_price, qty, stop_price):
         self.ticker = ticker
@@ -214,12 +214,17 @@ class Position:
         self.qty = qty
         self.stop_price = stop_price
         self.value = qty * entry_price   # mark-to-market value, updated daily
-        self.pending_exit = False        # indicator exit signaled yesterday, fires at today's open
+        self.pending_exit = False        # exit decided on a prior day, fires at today's open
+        self.pending_reason = "signal"   # what decided it: "signal" or "time"
+        self.days_held = 0               # trading days since fill
 
 
 def run_backtest(combos: list[tuple[str, str]], mapping: dict[str, int],
                   panel: pd.DataFrame, delist: pd.DataFrame, regime: pd.DataFrame,
-                  cost_bps: float, use_stop: bool) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+                  cost_bps: float, use_stop: bool,
+                  atr_stop: float | None = None, trail: float | None = None,
+                  time_stop: int | None = None,
+                  prebuilt: dict | None = None) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """
     Single shared portfolio replay over the union trading calendar.
     combos order = watchlist priority order (first strategy in sorted list wins ties).
@@ -230,12 +235,25 @@ def run_backtest(combos: list[tuple[str, str]], mapping: dict[str, int],
     # Preload each needed permno's series once, indexed by date, with a lookup dict per day.
     permno_by_ticker = {t: mapping[t] for t, _ in combos if t in mapping}
     needed_permnos = set(permno_by_ticker.values())
-    panel = panel[panel["permno"].isin(needed_permnos)]
 
-    per_permno = {}
-    for permno, g in panel.groupby("permno", sort=False):
-        g = g.set_index("date").sort_index()
-        per_permno[permno] = g
+    if prebuilt is not None and "per_permno" in prebuilt:
+        # sweep mode: series + signals are identical across exit configs — build once
+        per_permno = prebuilt["per_permno"]
+    else:
+        panel = panel[panel["permno"].isin(needed_permnos)]
+        per_permno = {}
+        for permno, g in panel.groupby("permno", sort=False):
+            g = g.set_index("date").sort_index()
+            # ATR(14) for the replacement exit stack (wide disaster stop + ratchet trail).
+            # Simple TR mean matches live ratchet_stops.py, not Wilder smoothing.
+            prev_close = g["adj_close"].shift(1)
+            tr = pd.concat([g["adj_high"] - g["adj_low"],
+                            (g["adj_high"] - prev_close).abs(),
+                            (g["adj_low"] - prev_close).abs()], axis=1).max(axis=1)
+            g["atr"] = tr.rolling(14).mean()
+            per_permno[permno] = g
+        if prebuilt is not None:
+            prebuilt["per_permno"] = per_permno
 
     # Delisting lookup: permno -> (dlstdt, dlret, dlstcd)
     delist_map = {}
@@ -307,7 +325,7 @@ def run_backtest(combos: list[tuple[str, str]], mapping: dict[str, int],
                 exit_fill_price = adj_open * (1 - cost_bps / 10000)   # costs move fills against you
                 exit_value = pos.qty * exit_fill_price
                 cash += exit_value
-                trades.append(_trade_record(pos, day, exit_fill_price, "signal", exit_value - pos.qty * pos.entry_price))
+                trades.append(_trade_record(pos, day, exit_fill_price, pos.pending_reason, exit_value - pos.qty * pos.entry_price))
                 del open_positions[ticker]
                 continue
 
@@ -356,8 +374,23 @@ def run_backtest(combos: list[tuple[str, str]], mapping: dict[str, int],
                     entries, exits, _ = sig
                     if day in exits.index and bool(exits.loc[day]):
                         pos.pending_exit = True
+                        pos.pending_reason = "signal"
 
             if not exited:
+                pos.days_held += 1
+                # TIME STOP — cap zombie holds; decided today, fills at tomorrow's open
+                if time_stop and not pos.pending_exit and pos.days_held >= time_stop:
+                    pos.pending_exit = True
+                    pos.pending_reason = "time"
+                # RATCHET TRAIL — raise-only, mirrors live ratchet_stops.py: the level is
+                # computed from TODAY's close/ATR but can only trigger from tomorrow
+                # (live raises stops each morning from yesterday's close).
+                if trail and use_stop:
+                    atr_t = row.get("atr", np.nan)
+                    if not pd.isna(atr_t):
+                        lvl = row["adj_close"] - trail * atr_t
+                        if lvl > pos.stop_price:
+                            pos.stop_price = lvl
                 # mark position value forward using CRSP total return (captures divs/splits day to day)
                 ret = row.get("ret", np.nan)
                 if not pd.isna(ret):
@@ -409,8 +442,15 @@ def run_backtest(combos: list[tuple[str, str]], mapping: dict[str, int],
                     continue
 
                 cash -= cost
-                pos = Position(ticker, strategy, permno, fill_day, fill_price, qty,
-                                fill_price * (1 - STOP_LOSS_PCT))
+                # Initial stop: wide ATR disaster stop when configured (doesn't strangle
+                # mean reversion), else the live fixed 5%. ATR known as of signal day.
+                if atr_stop is not None:
+                    atr_e = g["atr"].asof(day)
+                    stop0 = (adj_open - atr_stop * atr_e) if not pd.isna(atr_e) \
+                            else fill_price * (1 - STOP_LOSS_PCT)
+                else:
+                    stop0 = fill_price * (1 - STOP_LOSS_PCT)
+                pos = Position(ticker, strategy, permno, fill_day, fill_price, qty, stop0)
                 open_positions[ticker] = pos
                 # NOTE: this entry executes on fill_day, one calendar step ahead of `day`;
                 # we still record it against combos in signal order (dedupe handled by ticker-in-open_positions check)
@@ -550,6 +590,14 @@ def main():
     parser.add_argument("--no-cost", action="store_true")
     parser.add_argument("--no-stop", action="store_true")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--atr_stop", type=float, default=None,
+                        help="replace fixed 5%% stop with entry_open - N*ATR14 disaster stop")
+    parser.add_argument("--trail", type=float, default=None,
+                        help="raise-only ratchet trail at close - N*ATR14 (live uses 2.5)")
+    parser.add_argument("--time_stop", type=int, default=None,
+                        help="exit after N trading days held")
+    parser.add_argument("--sweep", action="store_true",
+                        help="run the exit-stack grid with split-half robustness table")
     args = parser.parse_args()
 
     cost_bps = 0.0 if args.no_cost else args.cost_bps
@@ -586,14 +634,78 @@ def main():
     delist = load_delistings()
     regime = build_market_index()
 
+    if args.sweep:
+        run_sweep(args, combos, mapping, panel, delist, regime, cost_bps)
+        return
+
     print(f"Running portfolio simulation over {len(combos)} combos...")
-    trades, equity, diag = run_backtest(combos, mapping, panel, delist, regime, cost_bps, use_stop)
+    trades, equity, diag = run_backtest(combos, mapping, panel, delist, regime, cost_bps, use_stop,
+                                        atr_stop=args.atr_stop, trail=args.trail,
+                                        time_stop=args.time_stop)
 
     print_report(args, len(full_mapping), len(universe), trades, equity, diag)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     trades.to_csv(OUT_DIR / f"parity_trades_{args.mode}.csv", index=False)
     equity.to_csv(OUT_DIR / f"parity_equity_{args.mode}.csv", index=False)
+
+
+def run_sweep(args, combos, mapping, panel, delist, regime, cost_bps):
+    """Exit-stack grid, one shared data build. For each config: full-period metrics
+    plus split-half PF/expectancy (2005-2014 vs 2015-2024) — a config only counts
+    as a winner if it works in BOTH halves (cheap walk-forward discipline; picking
+    the single best full-period cell is how exit grids get overfit)."""
+    grid = []
+    for a in (3.0, 4.0, 5.0, None):          # ATR disaster stop mult (None = no stop at all)
+        for tr in (None, 2.5):               # ratchet trail mult (2.5 = live ratchet)
+            for ts in (None, 40):            # time stop, trading days
+                grid.append({"atr_stop": a, "trail": tr, "time_stop": ts})
+    grid.append({"atr_stop": "FIXED5", "trail": None, "time_stop": None})   # live baseline
+
+    prebuilt: dict = {}
+    rows = []
+    for i, cfg in enumerate(grid):
+        fixed = cfg["atr_stop"] == "FIXED5"
+        a = None if fixed else cfg["atr_stop"]
+        use_stop = fixed or a is not None or cfg["trail"] is not None
+        trades, equity, _ = run_backtest(
+            combos, mapping, panel, delist, regime, cost_bps, use_stop,
+            atr_stop=None if fixed else a, trail=cfg["trail"],
+            time_stop=cfg["time_stop"], prebuilt=prebuilt)
+        closed = trades[trades.exit_reason != "open_at_end"]
+        eq = equity.set_index("date")["equity"]
+        ret = eq.pct_change().dropna()
+
+        def _pf(df):
+            w, l = df[df.pnl > 0], df[df.pnl <= 0]
+            return w.pnl.sum() / abs(l.pnl.sum()) if len(l) and l.pnl.sum() else float("inf")
+
+        h1 = closed[closed.exit_date < "2015-01-01"]
+        h2 = closed[closed.exit_date >= "2015-01-01"]
+        rows.append({
+            "stop": "5%fix" if fixed else (f"{a:.0f}xATR" if a else "none"),
+            "trail": cfg["trail"] or "-", "tstop": cfg["time_stop"] or "-",
+            "trades": len(closed),
+            "win%": round(100 * (closed.pnl > 0).mean(), 1),
+            "PF": round(_pf(closed), 2),
+            "exp$": round(closed.pnl.mean(), 0),
+            "sharpe": round(ret.mean() / ret.std() * np.sqrt(252), 2) if ret.std() > 0 else 0,
+            "maxDD%": round(100 * (eq / eq.cummax() - 1).min(), 1),
+            "PF_05_14": round(_pf(h1), 2), "PF_15_24": round(_pf(h2), 2),
+            "exp$_h1": round(h1.pnl.mean(), 0) if len(h1) else 0,
+            "exp$_h2": round(h2.pnl.mean(), 0) if len(h2) else 0,
+        })
+        print(f"  [{i+1}/{len(grid)}] stop={rows[-1]['stop']:6} trail={rows[-1]['trail']}"
+              f" tstop={rows[-1]['tstop']}  PF={rows[-1]['PF']}  "
+              f"halves {rows[-1]['PF_05_14']}/{rows[-1]['PF_15_24']}", flush=True)
+
+    res = pd.DataFrame(rows)
+    res.to_csv(OUT_DIR / f"exit_sweep_{args.mode}.csv", index=False)
+    print("\n" + "=" * 100)
+    print(f"EXIT-STACK SWEEP  mode={args.mode}  cost={cost_bps}bps/side  2005-2024  "
+          f"(both halves must hold up)")
+    print("=" * 100)
+    print(res.sort_values("sharpe", ascending=False).to_string(index=False))
 
 
 if __name__ == "__main__":

@@ -91,15 +91,10 @@ else
     echo "  skipped (--signals-only)" | tee -a "$LOG"
 fi
 
-# Step 6: ratcheting ATR trail — raise stops on winners (never lowers; run after the
-# guardrail so every position is guaranteed to have a stop to raise).
-echo "" | tee -a "$LOG"
-echo "[ 6/6 ] Ratchet trail..." | tee -a "$LOG"
-if [ "$SIGNALS_ONLY" != true ]; then
-    $PYTHON ratchet_stops.py 2>&1 | tee -a "$LOG"; [ "${PIPESTATUS[0]}" -ne 0 ] && FAIL=1
-else
-    echo "  skipped (--signals-only)" | tee -a "$LOG"
-fi
+# NOTE (2026-07-05): the ratchet-trail step that briefly lived here was REMOVED after
+# the exit sweep falsified it — trailing strangles mean-reversion recoveries the same
+# way the tight 5% stop did (Sharpe 1.28-1.32 -> 0.89 across every trail config).
+# Exits are: indicator signal (the strategy) + a wide 4xATR disaster stop set at entry.
 
 # Heartbeat — ping success, or /fail if any step above failed. Silent no-op if unset.
 if [ -n "$HEALTHCHECK_URL" ]; then
