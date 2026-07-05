@@ -166,9 +166,9 @@ def map_tickers_to_permno(tickers: list[str]) -> dict[str, int]:
 
 # ── Watchlist ────────────────────────────────────────────────────────────────
 
-def load_watchlist_combos() -> list[tuple[str, str]]:
+def load_watchlist_combos(path=None) -> list[tuple[str, str]]:
     """(ticker, strategy) combos matching the live bot's validated-survivor filter."""
-    val = pd.read_csv(VALIDATION_FILE)
+    val = pd.read_csv(path or VALIDATION_FILE)
     # oos_profitable may be bool or string depending on how the CSV was written
     if val["oos_profitable"].dtype == object:
         prof = val["oos_profitable"].astype(str).str.strip().str.lower() == "true"
@@ -616,6 +616,11 @@ def main():
                         help="exit after N trading days held")
     parser.add_argument("--sweep", action="store_true",
                         help="run the exit-stack grid with split-half robustness table")
+    parser.add_argument("--validation_file", default=None,
+                        help="alternate validation csv (e.g. the CRSP re-validation)")
+    parser.add_argument("--sizing", choices=["fixed", "frac", "atr_risk"], default="fixed")
+    parser.add_argument("--slots", type=int, default=None)
+    parser.add_argument("--risk_pct", type=float, default=0.01)
     parser.add_argument("--sweep_sizing", action="store_true",
                         help="run the sizing/slots grid on the validated 4xATR exit stack")
     args = parser.parse_args()
@@ -625,7 +630,7 @@ def main():
 
     universe = build_ticker_universe()
     if args.mode == "watchlist":
-        combos = load_watchlist_combos()
+        combos = load_watchlist_combos(args.validation_file)
         tickers_needed = sorted({t for t, _ in combos})
     else:
         tickers_needed = universe
@@ -664,7 +669,9 @@ def main():
     print(f"Running portfolio simulation over {len(combos)} combos...")
     trades, equity, diag = run_backtest(combos, mapping, panel, delist, regime, cost_bps, use_stop,
                                         atr_stop=args.atr_stop, trail=args.trail,
-                                        time_stop=args.time_stop)
+                                        time_stop=args.time_stop,
+                                        max_positions=args.slots or MAX_POSITIONS,
+                                        sizing=args.sizing, risk_pct=args.risk_pct)
 
     print_report(args, len(full_mapping), len(universe), trades, equity, diag)
 
