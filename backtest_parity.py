@@ -54,13 +54,15 @@ TRADE_END   = pd.Timestamp("2024-12-31")
 
 # ── Data loading ─────────────────────────────────────────────────────────────
 
-def load_crsp_panel() -> pd.DataFrame:
-    """Concat all 59 dsf_*.parquet files, keep only needed columns/dtypes."""
+def load_crsp_panel(permnos: set[int]) -> pd.DataFrame:
+    """Concat the dsf_*.parquet files, filtered to needed permnos at read time
+    (the full panel is 27M rows — loading it unfiltered wastes several GB)."""
     cols = ["permno", "date", "openprc", "prc", "askhi", "bidlo", "vol", "ret", "cfacpr"]
     files = sorted(CRSP_DIR.glob("dsf_*.parquet"))
+    flt = [("permno", "in", sorted(permnos))]
     frames = []
     for f in files:
-        df = pd.read_parquet(f, columns=cols)
+        df = pd.read_parquet(f, columns=cols, filters=flt)
         df = df[(df["date"] >= LOAD_START) & (df["date"] <= LOAD_END)]
         frames.append(df)
     panel = pd.concat(frames, ignore_index=True)
@@ -418,6 +420,18 @@ def run_backtest(combos: list[tuple[str, str]], mapping: dict[str, int],
             mtm = sum(p.value for p in open_positions.values())
             equity_curve.append((day, cash + mtm))
 
+    # Force-close anything still open at sample end at its last mark so the
+    # trade ledger reconciles with the final equity value.
+    if len(all_dates):
+        for ticker in list(open_positions.keys()):
+            pos = open_positions[ticker]
+            exit_value = pos.value * (1 - cost_bps / 10000)
+            exit_fill_price = exit_value / pos.qty if pos.qty else 0.0
+            cash += exit_value
+            trades.append(_trade_record(pos, all_dates[-1], exit_fill_price, "open_at_end",
+                                        exit_value - pos.qty * pos.entry_price))
+            del open_positions[ticker]
+
     trades_df = pd.DataFrame(trades)
     equity_df = pd.DataFrame(equity_curve, columns=["date", "equity"])
 
@@ -554,22 +568,28 @@ def main():
         if combos is not None:
             combos = [(t, s) for t, s in combos if t in set(tickers_needed)]
 
+    # Map the FULL universe (not just the watchlist) so the coverage number is
+    # comparable across modes and flags mapping gaps in the whole cache.
     print("Mapping tickers to permno...")
-    mapping = map_tickers_to_permno(tickers_needed)
-    print(f"  {len(mapping)}/{len(tickers_needed)} tickers mapped")
+    full_mapping = map_tickers_to_permno(universe)
+    print(f"  Ticker->permno mapping: {len(full_mapping)}/{len(universe)} tickers mapped")
+    unmapped_needed = [t for t in tickers_needed if t not in full_mapping]
+    if unmapped_needed:
+        print(f"  No permno for needed tickers: {unmapped_needed}")
+    mapping = {t: full_mapping[t] for t in tickers_needed if t in full_mapping}
 
     if args.mode == "all":
         combos = all_mode_combos(sorted(mapping.keys()))
 
     print("Loading CRSP daily panel (2000-2024)...")
-    panel = load_crsp_panel()
+    panel = load_crsp_panel(set(mapping.values()))
     delist = load_delistings()
     regime = build_market_index()
 
     print(f"Running portfolio simulation over {len(combos)} combos...")
     trades, equity, diag = run_backtest(combos, mapping, panel, delist, regime, cost_bps, use_stop)
 
-    print_report(args, len(mapping), len(tickers_needed), trades, equity, diag)
+    print_report(args, len(full_mapping), len(universe), trades, equity, diag)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     trades.to_csv(OUT_DIR / f"parity_trades_{args.mode}.csv", index=False)
