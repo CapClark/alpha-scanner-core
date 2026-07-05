@@ -224,6 +224,8 @@ def run_backtest(combos: list[tuple[str, str]], mapping: dict[str, int],
                   cost_bps: float, use_stop: bool,
                   atr_stop: float | None = None, trail: float | None = None,
                   time_stop: int | None = None,
+                  max_positions: int = MAX_POSITIONS, sizing: str = "fixed",
+                  risk_pct: float = 0.01,
                   prebuilt: dict | None = None) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """
     Single shared portfolio replay over the union trading calendar.
@@ -428,12 +430,36 @@ def run_backtest(combos: list[tuple[str, str]], mapping: dict[str, int],
                     nan_open_count += 1
                 nan_open_total += 1
 
-                if len(open_positions) >= MAX_POSITIONS:
+                if len(open_positions) >= max_positions:
                     skipped_events.append((fill_day, ticker, "portfolio full"))
                     continue
 
                 fill_price = adj_open * (1 + cost_bps / 10000)
-                qty = int(POSITION_SIZE / fill_price)
+
+                # Initial stop first — ATR-risk sizing needs the stop distance.
+                # Wide ATR disaster stop when configured (doesn't strangle mean
+                # reversion), else the live fixed 5%. ATR known as of signal day.
+                atr_e = g["atr"].asof(day) if atr_stop is not None else np.nan
+                if atr_stop is not None and not pd.isna(atr_e):
+                    stop0 = adj_open - atr_stop * atr_e
+                else:
+                    stop0 = fill_price * (1 - STOP_LOSS_PCT)
+
+                # Position sizing (whole shares — live brackets need them):
+                #   fixed    — live baseline: $10k notional, no compounding
+                #   frac     — equity/max_positions per slot: compounds with the account
+                #   atr_risk — risk risk_pct of equity to the stop (canslim's proven
+                #              pattern): qty = $risk / stop_distance, capped at 20% equity
+                equity_now = cash + sum(p.value for p in open_positions.values())
+                if sizing == "frac":
+                    target = equity_now / max_positions
+                elif sizing == "atr_risk":
+                    stop_dist = max(fill_price - stop0, 1e-9)
+                    target = min((risk_pct * equity_now / stop_dist) * fill_price,
+                                 0.20 * equity_now)
+                else:
+                    target = POSITION_SIZE
+                qty = int(target / fill_price)
                 if qty <= 0:
                     continue
                 cost = qty * fill_price
@@ -442,14 +468,6 @@ def run_backtest(combos: list[tuple[str, str]], mapping: dict[str, int],
                     continue
 
                 cash -= cost
-                # Initial stop: wide ATR disaster stop when configured (doesn't strangle
-                # mean reversion), else the live fixed 5%. ATR known as of signal day.
-                if atr_stop is not None:
-                    atr_e = g["atr"].asof(day)
-                    stop0 = (adj_open - atr_stop * atr_e) if not pd.isna(atr_e) \
-                            else fill_price * (1 - STOP_LOSS_PCT)
-                else:
-                    stop0 = fill_price * (1 - STOP_LOSS_PCT)
                 pos = Position(ticker, strategy, permno, fill_day, fill_price, qty, stop0)
                 open_positions[ticker] = pos
                 # NOTE: this entry executes on fill_day, one calendar step ahead of `day`;
@@ -598,6 +616,8 @@ def main():
                         help="exit after N trading days held")
     parser.add_argument("--sweep", action="store_true",
                         help="run the exit-stack grid with split-half robustness table")
+    parser.add_argument("--sweep_sizing", action="store_true",
+                        help="run the sizing/slots grid on the validated 4xATR exit stack")
     args = parser.parse_args()
 
     cost_bps = 0.0 if args.no_cost else args.cost_bps
@@ -636,6 +656,9 @@ def main():
 
     if args.sweep:
         run_sweep(args, combos, mapping, panel, delist, regime, cost_bps)
+        return
+    if args.sweep_sizing:
+        run_sweep_sizing(args, combos, mapping, panel, delist, regime, cost_bps)
         return
 
     print(f"Running portfolio simulation over {len(combos)} combos...")
@@ -704,6 +727,63 @@ def run_sweep(args, combos, mapping, panel, delist, regime, cost_bps):
     print("\n" + "=" * 100)
     print(f"EXIT-STACK SWEEP  mode={args.mode}  cost={cost_bps}bps/side  2005-2024  "
           f"(both halves must hold up)")
+    print("=" * 100)
+    print(res.sort_values("sharpe", ascending=False).to_string(index=False))
+
+
+def run_sweep_sizing(args, combos, mapping, panel, delist, regime, cost_bps):
+    """Deployment sweep: sizing mode x slot count, all on the validated exit stack
+    (4xATR disaster stop, no trail). The exit sweep fixed WHAT we exit; this fixes
+    HOW MUCH capital each signal gets. With compounding sizings the honest metrics
+    are CAGR/Sharpe/MaxDD (expectancy-$ is not comparable across compounding modes),
+    plus split-half CAGR so a config must earn its keep in both decades."""
+    grid = [{"sizing": "fixed", "slots": 10, "risk": None}]          # live baseline
+    for sizing in ("frac", "atr_risk"):
+        for slots in (10, 15, 20, 30):
+            if sizing == "atr_risk":
+                for r in (0.01, 0.02):
+                    grid.append({"sizing": sizing, "slots": slots, "risk": r})
+            else:
+                grid.append({"sizing": sizing, "slots": slots, "risk": None})
+
+    prebuilt: dict = {}
+    rows = []
+    for i, cfg in enumerate(grid):
+        trades, equity, _ = run_backtest(
+            combos, mapping, panel, delist, regime, cost_bps, use_stop=True,
+            atr_stop=4.0, trail=None, time_stop=None,
+            max_positions=cfg["slots"], sizing=cfg["sizing"],
+            risk_pct=cfg["risk"] or 0.01, prebuilt=prebuilt)
+        closed = trades[trades.exit_reason != "open_at_end"]
+        eq = equity.set_index("date")["equity"]
+        ret = eq.pct_change().dropna()
+        yrs = (eq.index[-1] - eq.index[0]).days / 365.25
+
+        def _cagr(e):
+            y = (e.index[-1] - e.index[0]).days / 365.25
+            return 100 * ((e.iloc[-1] / e.iloc[0]) ** (1 / y) - 1) if y > 0 and e.iloc[0] > 0 else 0
+
+        h1, h2 = eq[eq.index < "2015-01-01"], eq[eq.index >= "2015-01-01"]
+        rows.append({
+            "sizing": cfg["sizing"] + (f"{cfg['risk']*100:.0f}%" if cfg["risk"] else ""),
+            "slots": cfg["slots"],
+            "trades": len(closed), "trades/yr": round(len(closed) / yrs, 0),
+            "win%": round(100 * (closed.pnl > 0).mean(), 1),
+            "CAGR%": round(_cagr(eq), 2),
+            "sharpe": round(ret.mean() / ret.std() * np.sqrt(252), 2) if ret.std() > 0 else 0,
+            "maxDD%": round(100 * (eq / eq.cummax() - 1).min(), 1),
+            "CAGR_h1": round(_cagr(h1), 2), "CAGR_h2": round(_cagr(h2), 2),
+            "final$k": round(eq.iloc[-1] / 1000, 0),
+        })
+        print(f"  [{i+1}/{len(grid)}] {rows[-1]['sizing']:9} slots={cfg['slots']:2}  "
+              f"CAGR={rows[-1]['CAGR%']:6.2f}%  sharpe={rows[-1]['sharpe']}  "
+              f"DD={rows[-1]['maxDD%']}%", flush=True)
+
+    res = pd.DataFrame(rows)
+    res.to_csv(OUT_DIR / f"sizing_sweep_{args.mode}.csv", index=False)
+    print("\n" + "=" * 100)
+    print(f"SIZING/SLOTS SWEEP  mode={args.mode}  exit=4xATR  cost={cost_bps}bps/side  "
+          f"2005-2024  (halves must both earn)")
     print("=" * 100)
     print(res.sort_values("sharpe", ascending=False).to_string(index=False))
 

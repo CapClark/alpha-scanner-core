@@ -132,13 +132,13 @@ def log_trade_entry(ticker: str, strategy: str, robustness: float,
 
 def place_buy(trading: TradingClient, data: StockHistoricalDataClient,
               ticker: str, strategy: str, robustness: float,
-              dry_run: bool = False) -> bool:
+              dry_run: bool = False, position_size: float = POSITION_SIZE) -> bool:
     price = get_latest_price(data, ticker)
     if price is None:
         print(f"  SKIP {ticker} — could not get price")
         return False
 
-    qty  = max(1, int(POSITION_SIZE / price))
+    qty  = max(1, int(position_size / price))
     # Wide ATR disaster stop (Gate 0 + exit sweep, 2026-07-05): a fixed 5% stop
     # truncated exactly the dip-buys that recover — it cost ~55% of expectancy
     # (PF 1.70 vs 2.27 at 4xATR on the watchlist; 1.20 vs 1.38 universe-wide,
@@ -304,7 +304,14 @@ def run(dry_run: bool = False) -> None:
     slots_available = MAX_POSITIONS - len(positions)
 
     if buys:
-        print(f"OPENING POSITIONS (buy signals, {slots_available} slot(s) available):")
+        # Equity-fraction sizing (sizing sweep, 2026-07-05): equity/MAX_POSITIONS per
+        # slot instead of fixed $10k. Fixed sizing silently de-risks as the account
+        # grows and killed compounding — CAGR 6.98% vs 13.80% at the SAME Sharpe/slots
+        # over 2005-2024. At current ~$107k equity this is ~$10.7k/slot, so the change
+        # is gradual by construction; it compounds (both ways) from here.
+        position_size = acct["equity"] / MAX_POSITIONS
+        print(f"OPENING POSITIONS (buy signals, {slots_available} slot(s) available, "
+              f"${position_size:,.0f}/slot):")
         opened = 0
         for b in buys:
             if opened >= slots_available:
@@ -313,10 +320,11 @@ def run(dry_run: bool = False) -> None:
             if b["ticker"] in positions:
                 print(f"  SKIP {b['ticker']:<6} — already held")
                 continue
-            if acct["buying_power"] < POSITION_SIZE:
+            if acct["buying_power"] < position_size:
                 print(f"  SKIP {b['ticker']:<6} — insufficient buying power")
                 continue
-            success = place_buy(trading, data, b["ticker"], b["strategy"], b["robustness"], dry_run)
+            success = place_buy(trading, data, b["ticker"], b["strategy"], b["robustness"],
+                                dry_run, position_size=position_size)
             if success:
                 opened += 1
         print()
