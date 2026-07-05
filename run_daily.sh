@@ -91,6 +91,16 @@ else
     echo "  skipped (--signals-only)" | tee -a "$LOG"
 fi
 
+# Step 6: ratcheting ATR trail — raise stops on winners (never lowers; run after the
+# guardrail so every position is guaranteed to have a stop to raise).
+echo "" | tee -a "$LOG"
+echo "[ 6/6 ] Ratchet trail..." | tee -a "$LOG"
+if [ "$SIGNALS_ONLY" != true ]; then
+    $PYTHON ratchet_stops.py 2>&1 | tee -a "$LOG"; [ "${PIPESTATUS[0]}" -ne 0 ] && FAIL=1
+else
+    echo "  skipped (--signals-only)" | tee -a "$LOG"
+fi
+
 # Heartbeat — ping success, or /fail if any step above failed. Silent no-op if unset.
 if [ -n "$HEALTHCHECK_URL" ]; then
     if [ "$FAIL" -eq 0 ]; then
