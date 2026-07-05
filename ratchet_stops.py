@@ -104,7 +104,17 @@ def main() -> int:
             tc.replace_order_by_id(cur.id, ReplaceOrderRequest(stop_price=target))
             raised += 1
         except Exception as e:
-            # some order states can't be replaced — fall back to cancel + re-place
+            msg = str(e)
+            # Price-validation rejections (e.g. stale off-hours IEX quote says the new
+            # stop is above "market") would fail cancel+new identically — and canceling
+            # first would leave the position NAKED (2026-07-05: STE went unprotected
+            # exactly this way: cancel landed as PENDING_CANCEL, the new submit was
+            # rejected). Keep the old stop and let the next in-hours run retry.
+            if "must be" in msg or "42210000" in msg:
+                print(f"         validation rejected new stop (stale quote?) — keeping ${cur_stop}")
+                continue
+            # Genuinely un-replaceable order state: cancel+new, and RESTORE the old
+            # stop if the new one is rejected so protection is never dropped.
             try:
                 tc.cancel_order_by_id(cur.id)
                 tc.submit_order(StopOrderRequest(
@@ -113,7 +123,14 @@ def main() -> int:
                 raised += 1
                 print(f"         (replaced via cancel+new: {type(e).__name__})")
             except Exception as e2:
-                print(f"         ERROR raising: {type(e2).__name__}: {e2}")
+                print(f"         new stop rejected ({type(e2).__name__}) — restoring old ${cur_stop}")
+                try:
+                    tc.submit_order(StopOrderRequest(
+                        symbol=sym, qty=int(float(pos.qty)), side=OrderSide.SELL,
+                        time_in_force=TimeInForce.GTC, stop_price=cur_stop))
+                except Exception as e3:
+                    print(f"         ERROR: could not restore old stop either ({e3}); "
+                          f"guard_stops --rearm will cover next run")
     print("-" * 78)
     print(f"{raised} stop(s) {'would be ' if dry else ''}raised.")
     return 0

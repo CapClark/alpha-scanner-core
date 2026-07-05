@@ -34,6 +34,7 @@ from alpaca.data.requests import StockLatestQuoteRequest, StockLatestTradeReques
 
 from signals import run as get_signals_output
 import signals as sig
+from ratchet_stops import atr_and_close   # ATR(14) + last close for the disaster stop
 
 load_dotenv()
 
@@ -43,6 +44,8 @@ SECRET_KEY   = os.getenv("ALPACA_SECRET_KEY")
 PAPER        = True          # always paper until you change this
 
 POSITION_SIZE  = 10_000      # USD per trade
+ATR_STOP_MULT     = 4.0      # disaster stop at entry - 4*ATR14 (validated 2026-07-05)
+FALLBACK_STOP_PCT = 0.10     # if ATR data unavailable — wide, so it can't strangle
 STOP_LOSS_PCT  = 0.05        # 5% stop loss
 MAX_POSITIONS  = 10          # max open positions at once
 MIN_ROBUSTNESS = 50          # only act on signals above this score
@@ -135,9 +138,18 @@ def place_buy(trading: TradingClient, data: StockHistoricalDataClient,
         print(f"  SKIP {ticker} — could not get price")
         return False
 
-    qty        = max(1, int(POSITION_SIZE / price))
-    stop_price = round(price * (1 - STOP_LOSS_PCT), 2)
-    cost       = round(qty * price, 2)
+    qty  = max(1, int(POSITION_SIZE / price))
+    # Wide ATR disaster stop (Gate 0 + exit sweep, 2026-07-05): a fixed 5% stop
+    # truncated exactly the dip-buys that recover — it cost ~55% of expectancy
+    # (PF 1.70 vs 2.27 at 4xATR on the watchlist; 1.20 vs 1.38 universe-wide,
+    # both decades independently). Stop = entry - 4*ATR14 is disaster insurance,
+    # not an exit; the strategy's exit is the indicator signal.
+    ac = atr_and_close(ticker)
+    if ac is not None:
+        stop_price = round(price - ATR_STOP_MULT * ac[0], 2)
+    else:
+        stop_price = round(price * (1 - FALLBACK_STOP_PCT), 2)   # wide fallback, not 5%
+    cost = round(qty * price, 2)
 
     print(f"  BUY  {ticker:<6}  qty={qty}  ~${cost}  stop=${stop_price}  (price~${price:.2f})")
 

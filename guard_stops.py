@@ -20,7 +20,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-STOP_LOSS_PCT = 0.05  # mirrors bot.py STOP_LOSS_PCT
+ATR_STOP_MULT     = 4.0   # mirrors bot.py: wide disaster stop, entry - 4*ATR14
+FALLBACK_STOP_PCT = 0.10  # wide fallback when ATR unavailable (never 5% — it strangles)
 LIVE_STATUSES = {
     "OrderStatus.NEW", "OrderStatus.HELD", "OrderStatus.ACCEPTED",
     "OrderStatus.PENDING_NEW", "OrderStatus.PARTIALLY_FILLED",
@@ -63,7 +64,11 @@ def main() -> int:
 
     print(f"!! UNPROTECTED: {len(naked)} of {len(positions)} position(s) lack a full stop")
     for p, held, cov in naked:
-        stop = round(float(p.avg_entry_price) * (1 - STOP_LOSS_PCT), 2)
+        from ratchet_stops import atr_and_close   # lazy: only needed when re-arming
+        entry = float(p.avg_entry_price)
+        ac = atr_and_close(p.symbol)
+        stop = round(entry - ATR_STOP_MULT * ac[0], 2) if ac is not None \
+               else round(entry * (1 - FALLBACK_STOP_PCT), 2)
         gap = int(held - cov)
         print(f"   {p.symbol:6} held {held:g}  stop-covered {cov:g}  "
               f"-> need GTC stop ${stop} for {gap} sh")
