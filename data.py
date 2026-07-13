@@ -127,6 +127,25 @@ def yf_fetch(ticker: str, start_date: str) -> pd.Series | None:
         return None
 
 
+def split_since(ticker: str, last_date) -> bool:
+    """True if yfinance records a share split AFTER last_date.
+
+    A split in the top-up gap is the one case incremental splicing corrupts: the
+    freshly fetched bars are auto-adjusted to today's basis, but the old cached
+    bars are not, so concatenating them leaves a split-ratio cliff at the seam
+    (e.g. OTLY 1:20 reverse split -> a fake +1,900% bar). When this is true the
+    caller must re-pull the FULL history instead of splicing.
+    """
+    try:
+        sp = yf.Ticker(ticker).splits
+        if sp is None or len(sp) == 0:
+            return False
+        idx = sp.index.tz_localize(None)
+        return bool((idx > pd.Timestamp(last_date)).any())
+    except Exception:
+        return False
+
+
 def topup(tickers: list[str] | None = None) -> None:
     """Fill the gap between last cached date and today using yfinance."""
     universe = tickers if tickers else get_cached_tickers()
@@ -142,6 +161,16 @@ def topup(tickers: list[str] | None = None) -> None:
             last_date = cached.index[-1].date()
             if last_date >= today - timedelta(days=1):
                 continue                              # already up to date
+            # Guard: a split in the gap makes incremental splicing corrupt the
+            # series (seam cliff). Re-pull full auto-adjusted history instead.
+            if split_since(ticker, last_date):
+                full = yf_fetch(ticker, START_DATE)
+                if full is not None and len(full) > 0:
+                    save_to_cache(ticker, full)
+                    updated += 1
+                    print(f"  {ticker}: split in gap -> full re-pull ({len(full)} bars)")
+                    time.sleep(0.05)
+                continue
             fetch_from = (last_date + timedelta(days=1)).strftime("%Y-%m-%d")
         else:
             fetch_from = START_DATE
