@@ -134,6 +134,46 @@ def update_exits(trading: TradingClient, df: pd.DataFrame) -> tuple[pd.DataFrame
     return df, closed_count
 
 
+# ── Reconciliation ─────────────────────────────────────────────────────────────
+
+def reconcile(trading: TradingClient, df: pd.DataFrame) -> None:
+    """Compare the log's OPEN trades against Alpaca's actual positions and print
+    both gaps. The tracker only ever CLOSES trades already in the log and never
+    discovers entries (bot.py writes those), so when the daily job runs on a
+    different host the local log silently drifts from broker truth. This makes
+    that drift loud instead of invisible. Read-only: never mutates the log.
+    """
+    try:
+        live = {p.symbol: p for p in trading.get_all_positions()}
+    except Exception as e:
+        print(f"  Reconcile: could not fetch positions: {e}")
+        return
+
+    log_open = set(df[df["status"] == "OPEN"]["ticker"])
+    live_syms = set(live)
+
+    untracked = sorted(live_syms - log_open)   # held on Alpaca, absent from log
+    phantom   = sorted(log_open - live_syms)   # log says OPEN, not held on Alpaca
+
+    print(f"\n  RECONCILIATION vs Alpaca  ({len(live_syms)} live / {len(log_open)} log-open)")
+    print("  " + "-" * 55)
+    if not untracked and not phantom:
+        print("  In sync — log matches broker positions.")
+        return
+
+    if untracked:
+        print(f"  !! {len(untracked)} held on Alpaca but MISSING from log (entered elsewhere?):")
+        for s in untracked:
+            p = live[s]
+            upl = float(getattr(p, "unrealized_pl", 0) or 0)
+            print(f"       {s:<6} qty {p.qty:<6} uPL ${upl:+,.2f}")
+    if phantom:
+        print(f"  !! {len(phantom)} log-OPEN but NOT held on Alpaca (exited untracked / mis-logged):")
+        for s in phantom:
+            print(f"       {s}")
+    print("  Log is out of sync with the broker — trust Alpaca, not local P&L, until resolved.")
+
+
 # ── Summary ────────────────────────────────────────────────────────────────────
 
 def print_summary(df: pd.DataFrame) -> None:
@@ -230,6 +270,7 @@ def run(summary_only: bool = False) -> None:
                 print(f"  {closed} trade(s) closed and logged.\n")
             else:
                 print("  No new exits found.\n")
+            reconcile(trading, df)
 
     print_summary(df)
 
