@@ -21,3 +21,6 @@ datasets/
 
 # Ignore Mac system files
 .DS_Store
+
+# but do track the example template
+!.env.example
