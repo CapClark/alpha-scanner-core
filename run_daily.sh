@@ -16,8 +16,12 @@ cd "$(dirname "$0")"
 # The cd above already moved us here, so pwd is its absolute path.
 PYTHON="$(pwd)/venv/bin/python"
 
-# Read just the heartbeat URL from .env (no full source → no surprises from other vars).
+# Read just the vars we need from .env (no full source → no surprises from other vars).
 HEALTHCHECK_URL="$(grep -E '^HEALTHCHECK_URL=' .env 2>/dev/null | head -1 | cut -d= -f2-)"
+# Vercel deploy token for the public-page publish step. Exported (not passed as a
+# --token CLI arg) so it never shows up in `ps`; the vercel CLI reads it from env.
+VERCEL_TOKEN="$(grep -E '^VERCEL_TOKEN=' .env 2>/dev/null | head -1 | cut -d= -f2-)"
+export VERCEL_TOKEN
 
 FAIL=0   # flips to 1 if any step exits non-zero — drives the heartbeat alert
 
@@ -87,7 +91,7 @@ $PYTHON tracker.py 2>&1 | tee -a "$LOG"; [ "${PIPESTATUS[0]}" -ne 0 ] && FAIL=1
 echo "" | tee -a "$LOG"
 echo "[ 4b  ] Publishing public results page..." | tee -a "$LOG"
 $PYTHON publish.py 2>&1 | tee -a "$LOG" || echo "  publish failed (non-fatal)" | tee -a "$LOG"
-# [ -n "$VERCEL_TOKEN" ] && vercel deploy ./public --prod --yes --token "$VERCEL_TOKEN" 2>&1 | tee -a "$LOG"
+[ -n "$VERCEL_TOKEN" ] && vercel deploy ./public --prod --yes 2>&1 | tee -a "$LOG" || true
 
 # Step 5: stop-loss guardrail — re-arm any naked position (defends the 2026-06 bug
 # where expired stop legs left positions unprotected). Non-zero exit => something was

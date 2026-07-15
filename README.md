@@ -2,6 +2,8 @@
 
 A fully automated swing trading system that backtests 7 quantitative strategies across 735 US equities, ranks every strategy-ticker combination by historical robustness, generates daily entry/exit signals on the top-ranked combinations, and executes paper (or live) trades via Alpaca with automatic stop-loss protection and P&L tracking.
 
+**📊 Live results dashboard → [strategygrade.io](https://strategygrade.io)** — redacted percentage metrics, equity trajectory, and trade ledger, regenerated daily.
+
 ---
 
 ## Table of Contents
