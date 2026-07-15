@@ -59,19 +59,21 @@ def get_regime() -> tuple[bool, float, float]:
     Returns (is_healthy, spy_price, spy_200ma).
     Healthy = SPY above its 200-day MA → allow new BUY entries.
     Bearish = SPY below 200-day MA → suppress all new BUY signals.
-    Fails open (returns True) if SPY data is unavailable.
+    Fails CLOSED (returns False) if SPY data is unavailable — skipping a day's
+    entries is safer than buying blind into an unknown regime, and a data
+    outage often coincides with the volatility the filter exists to dodge.
     """
     try:
         import yfinance as yf
         spy = yf.Ticker("SPY").history(period="2y", auto_adjust=True)["Close"].dropna()
         spy.index = spy.index.tz_localize(None)
         if len(spy) < 200:
-            return True, float("nan"), float("nan")
+            return False, float("nan"), float("nan")
         ma200 = float(spy.rolling(200).mean().iloc[-1])
         price = float(spy.iloc[-1])
         return price > ma200, price, ma200
     except Exception:
-        return True, float("nan"), float("nan")
+        return False, float("nan"), float("nan")
 
 
 # ── Signal detection ───────────────────────────────────────────────────────────
@@ -183,7 +185,7 @@ def run(top_n: int = 50) -> None:
         if not regime_ok:
             print(f"  ⚠️  SPY below 200-day MA — new BUY entries suppressed")
     else:
-        print(f"  Market regime: UNKNOWN (SPY data unavailable — proceeding with BUY signals)")
+        print(f"  Market regime: UNKNOWN (SPY data unavailable — suppressing new BUY entries, fail-safe)")
     print()
 
     # Use oos_sharpe if validated, else is_robustness/robustness_score

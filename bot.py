@@ -197,11 +197,19 @@ def place_buy(trading: TradingClient, data: StockHistoricalDataClient,
             stop_loss=StopLossRequest(stop_price=stop_price),
         )
         trading.submit_order(order)
-        log_trade_entry(ticker, strategy, robustness, price, qty)
-        return True
     except Exception as e:
         print(f"  ERROR placing BUY for {ticker}: {e}")
         return False
+    # Order is live now (with its protective stop). A local trade_log write
+    # failure must NOT report the trade as failed - that miscounts open slots
+    # (risking over-opening) and loses the position from the ledger entirely.
+    # Log separately, loud on failure, but still report the BUY as placed.
+    try:
+        log_trade_entry(ticker, strategy, robustness, price, qty)
+    except Exception as e:
+        print(f"  WARNING: BUY for {ticker} SUBMITTED but trade_log write FAILED "
+              f"(position is live, untracked): {e}")
+    return True
 
 
 def place_sell(trading: TradingClient, ticker: str,
