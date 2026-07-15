@@ -10,7 +10,7 @@ My dad has traded full-time for about a decade and used to send me his setups co
 
 Not every strategy works on every stock. RSI mean-reversion can do well on a range-bound pharma name and terribly on a high-momentum tech name. So instead of picking one strategy and spraying it across the market, this tests every strategy on every stock, scores each pairing by how *robustly* it held up (not just raw return), and only trades the pairings that had a real, repeatable edge.
 
-The catch every quant hits: test 5,000 combinations and some will look brilliant on pure luck. The fix here is walk-forward validation — train on history, test on years the strategy never saw, and throw out anything whose edge evaporates.
+The catch every quant hits: test 5,000 combinations and some will look brilliant on pure luck. The fix here is walk-forward validation. Train on history, test on years the strategy never saw, and throw out anything whose edge evaporates.
 
 ## How it runs
 
@@ -33,11 +33,11 @@ Seven classic setups, each reduced to boolean entry/exit series and simulated wi
 
 | Strategy | Type | In live watchlist |
 | --- | --- | --- |
-| BBands + RSI (dual confirm) | Mean reversion | Yes — best out-of-sample |
+| BBands + RSI (dual confirm) | Mean reversion | Yes, best out-of-sample |
 | RSI(14) | Mean reversion | Yes |
 | Bollinger Bands (20, 2σ) | Mean reversion | Yes |
 | MACD crossover | Momentum | Yes |
-| RSI(21) | Mean reversion | No — negative OOS Sharpe |
+| RSI(21) | Mean reversion | No, negative OOS Sharpe |
 | RSI(14) + 200-day trend filter | Mean reversion + trend | Backtest only |
 | MA cross (50/200) | Trend | Backtest only |
 
@@ -55,7 +55,7 @@ The point is that a 500% return off 3 lucky trades should lose to a 150% return 
 
 ## Walk-forward validation
 
-Ranking on the full backtest overfits, so the top combos get retested on 9 rolling windows, each ending in a different market regime (dot-com aftermath 2006, GFC 2008, Euro crisis 2011, oil crash 2015, vol spike 2018, COVID recovery 2021, rate-hike bear 2022, plus 2023–24). A combo must appear in at least 3 windows to qualify.
+Ranking on the full backtest overfits, so the top combos get retested on 9 rolling windows, each ending in a different market regime (dot-com aftermath 2006, GFC 2008, Euro crisis 2011, oil crash 2015, vol spike 2018, COVID recovery 2021, rate-hike bear 2022, plus 2023 and 2024). A combo must appear in at least 3 windows to qualify.
 
 Survivor filters:
 
@@ -72,7 +72,7 @@ windows_tested >= 3      # robust across regimes, not one lucky year
 
 - **Server-side stop loss.** Every buy is an OTO bracket order with a 5% stop that lives on Alpaca's servers, so it fires even if my machine is asleep. Max ~0.5% of capital at risk per trade.
 - **Concentration limit.** Never more than 10 open positions, $10k each, so no single name is over 10% of the book.
-- **Market regime filter.** Each morning it checks SPY against its 200-day MA. If SPY is below it (bearish), new buys are suppressed and the system sits in cash — exits and stops still fire. In 2022 that would have meant ~10 months of no new entries through the bear market.
+- **Market regime filter.** Each morning it checks SPY against its 200-day MA. If SPY is below it (bearish), new buys are suppressed and the system sits in cash while exits and stops still fire. In 2022 that would have meant ~10 months of no new entries through the bear market.
 - **Validation gate.** Only the 29 walk-forward survivors are tradable at all.
 
 ## Results
@@ -83,11 +83,11 @@ From the backtest and paper trading (this is a backtest plus paper account, not 
 | --- | --- | --- | --- | --- | --- |
 | ADI | BBands(20,2) | 423.4 | 1192% | 1.25 | 87% |
 | SYK | RSI(14) | 400.6 | 499% | 1.15 | 90% |
-| CAH | BBands(20,2) | 387.9 | — | — | — |
-| TJX | RSI(14) | 295.2 | — | — | — |
-| LLY | BBands(20,2) | 243.5 | — | — | — |
+| CAH | BBands(20,2) | 387.9 | n/a | n/a | n/a |
+| TJX | RSI(14) | 295.2 | n/a | n/a | n/a |
+| LLY | BBands(20,2) | 243.5 | n/a | n/a | n/a |
 
-Across all ~5,000 qualifying combos: average win rate 63%, average Sharpe 0.37. The spread matters more than the top line — most combos are mediocre, which is the point of filtering hard.
+Across all ~5,000 qualifying combos: average win rate 63%, average Sharpe 0.37. The spread matters more than the top line; most combos are mediocre, which is the point of filtering hard.
 
 ## Running it
 
@@ -102,11 +102,11 @@ python3 validate.py         # walk-forward validation (~10 min)
 python3 tracker.py --summary-only   # check P&L anytime
 ```
 
-Defaults to Alpaca paper trading. Going live is a funded live account, live keys in `.env`, and flipping `PAPER = False` in `bot.py` — everything else is identical.
+Defaults to Alpaca paper trading. Going live is a funded live account, live keys in `.env`, and flipping `PAPER = False` in `bot.py`. Everything else is identical.
 
 ## Stack
 
-`vectorbt` (backtesting + indicators), `pandas` / `numpy`, `yfinance` (daily top-up), `alpaca-py` (brokerage), `psycopg2` (WRDS/CRSP over Postgres), `python-dotenv`. Historical data is CRSP via WRDS — the same split/dividend-adjusted, survivorship-aware dataset academic researchers use — with yfinance filling the gap from where CRSP ends to today.
+`vectorbt` (backtesting + indicators), `pandas` / `numpy`, `yfinance` (daily top-up), `alpaca-py` (brokerage), `psycopg2` (WRDS/CRSP over Postgres), `python-dotenv`. Historical data is CRSP via WRDS, the same split/dividend-adjusted, survivorship-aware dataset academic researchers use, with yfinance filling the gap from where CRSP ends to today.
 
 ## Disclaimer
 
