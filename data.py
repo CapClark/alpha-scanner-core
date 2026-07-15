@@ -11,6 +11,7 @@ Other options:
 """
 import argparse
 import getpass
+import os
 import time
 import warnings
 import psycopg2
@@ -28,7 +29,7 @@ BATCH_SIZE = 100
 WRDS_HOST = "wrds-pgdata.wharton.upenn.edu"
 WRDS_PORT = 9737
 WRDS_DB   = "wrds"
-WRDS_USER = "ksugsvanvit"
+WRDS_USER = os.environ.get("WRDS_USER") or input("WRDS username: ")
 
 
 # ── WRDS connection ────────────────────────────────────────────────────────────
