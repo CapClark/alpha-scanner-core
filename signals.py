@@ -40,10 +40,15 @@ MIN_WINDOWS      = 3     # combo must have appeared in at least 3 IS windows
 
 def load_close(ticker: str) -> pd.Series | None:
     path = CACHE_DIR / f"{ticker}_prices.csv"
+    if not path.exists():
+        return None                      # expected: ticker simply not cached
     try:
         df = pd.read_csv(path, index_col="timestamp", parse_dates=True)
         return df["Close"].dropna()
-    except Exception:
+    except Exception as e:
+        # File exists but won't parse (truncated/corrupt) - a held ticker could
+        # go blind here, so make it loud instead of silently dropping it.
+        print(f"  CORRUPT CACHE {ticker}: {e}")
         return None
 
 
@@ -80,7 +85,10 @@ def check_signal(close: pd.Series, strategy_name: str) -> str:
         if exits.iloc[-LOOKBACK:].any():
             return "SELL"
         return "HOLD"
-    except Exception:
+    except Exception as e:
+        # A throwing strategy silently stops a held ticker from ever getting its
+        # SELL exit. Log it so it is visible, not a phantom HOLD.
+        print(f"  SIGNAL ERROR {strategy_name}: {e}")
         return "ERROR"
 
 
@@ -241,6 +249,10 @@ def run(top_n: int = 50) -> None:
     # ── Summary ────────────────────────────────────────────────────────────────
     holds = df[df["signal"] == "HOLD"]
     print(f"  HOLD  {len(holds)} positions — no signal today")
+    errors = df[df["signal"] == "ERROR"]
+    if len(errors):
+        print(f"  !! ERROR  {len(errors)} tickers failed signal eval "
+              f"(flying blind, no exit): {', '.join(errors['ticker'].tolist())}")
     print(f"  Data as of: {df['as_of'].max()}")
 
 

@@ -11,6 +11,8 @@ Other options:
 """
 import argparse
 import getpass
+import os
+import sys
 import time
 import warnings
 import psycopg2
@@ -76,7 +78,11 @@ def load_cache(ticker: str) -> pd.Series | None:
 def save_to_cache(ticker: str, series: pd.Series) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path = CACHE_DIR / f"{ticker}_prices.csv"
-    series.to_frame("Close").to_csv(path, index_label="timestamp")
+    # Atomic write: a crash mid-write must not leave a truncated CSV that later
+    # loads as "no data" and silently drops the ticker from signals.
+    tmp = path.with_suffix(".csv.tmp")
+    series.to_frame("Close").to_csv(tmp, index_label="timestamp")
+    os.replace(tmp, path)
 
 
 # ── CRSP helpers ───────────────────────────────────────────────────────────────
@@ -146,11 +152,18 @@ def split_since(ticker: str, last_date) -> bool:
         return False
 
 
-def topup(tickers: list[str] | None = None) -> None:
-    """Fill the gap between last cached date and today using yfinance."""
+def topup(tickers: list[str] | None = None) -> tuple[int, int]:
+    """Fill the gap between last cached date and today using yfinance.
+
+    Returns (updated, attempted). `attempted` counts tickers that genuinely
+    needed a fetch (excludes already-current ones), so the caller can tell a
+    total data-feed outage (attempted>0, updated==0) apart from a quiet
+    everything-already-current run (attempted==0).
+    """
     universe = tickers if tickers else get_cached_tickers()
     today    = datetime.today().date()
-    updated  = 0
+    updated   = 0
+    attempted = 0
 
     print(f"Top-up: filling gap to {today} for {len(universe)} tickers via yfinance...\n")
 
@@ -164,6 +177,7 @@ def topup(tickers: list[str] | None = None) -> None:
             # Guard: a split in the gap makes incremental splicing corrupt the
             # series (seam cliff). Re-pull full auto-adjusted history instead.
             if split_since(ticker, last_date):
+                attempted += 1
                 full = yf_fetch(ticker, START_DATE)
                 if full is not None and len(full) > 0:
                     save_to_cache(ticker, full)
@@ -175,6 +189,7 @@ def topup(tickers: list[str] | None = None) -> None:
         else:
             fetch_from = START_DATE
 
+        attempted += 1
         new_data = yf_fetch(ticker, fetch_from)
         if new_data is None or new_data.empty:
             continue
@@ -193,6 +208,7 @@ def topup(tickers: list[str] | None = None) -> None:
             print(f"  [{i}/{len(universe)}]  {updated} tickers updated so far")
 
     print(f"\nTop-up done. {updated} tickers extended to {today}.")
+    return updated, attempted
 
 
 # ── Full CRSP refresh ──────────────────────────────────────────────────────────
@@ -248,6 +264,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.topup:
-        topup(tickers=args.tickers)
+        updated, attempted = topup(tickers=args.tickers)
+        # Fail loud on a total data-feed outage so run_daily.sh marks the run
+        # FAILED instead of letting the bot trade on stale prices under a green
+        # heartbeat. attempted==0 means everything was already current (fine).
+        if attempted > 0 and updated == 0:
+            print(f"ERROR: top-up attempted {attempted} tickers but updated 0 - "
+                  f"yfinance feed likely down. Failing loud.", file=sys.stderr)
+            sys.exit(1)
     else:
         refresh(tickers=args.tickers, start_date=args.start)
