@@ -17,6 +17,7 @@ import argparse
 import os
 import csv
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -30,8 +31,10 @@ from alpaca.trading.requests import (
     GetOrdersRequest,
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass, QueryOrderStatus
+from alpaca.common.exceptions import APIError
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest, StockLatestTradeRequest
+from requests.exceptions import RequestException
 
 from signals import run as get_signals_output
 import signals as sig
@@ -68,16 +71,36 @@ def get_clients():
     return trading, data
 
 
+def _retry(fn, *args, what="Alpaca call", tries=4, base=3.0, **kwargs):
+    """Call an IDEMPOTENT Alpaca read with retry + exponential backoff.
+
+    A single transient broker error (504 gateway timeout, connection reset) at
+    the top of the run must not abort the whole day and skip every exit — which
+    is exactly what happened 2026-07-14. Only use this for reads (get_account,
+    get_all_positions, latest trade); never for order submission, where a retry
+    after a timed-out-but-accepted request could place a duplicate order.
+    """
+    for i in range(1, tries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except (APIError, RequestException) as e:
+            if i == tries:
+                raise
+            wait = base * (2 ** (i - 1))
+            print(f"  {what}: transient error ({e}); retry {i}/{tries - 1} in {wait:.0f}s")
+            time.sleep(wait)
+
+
 # ── Account info ───────────────────────────────────────────────────────────────
 
 def get_open_positions(trading: TradingClient) -> dict[str, object]:
     """Return {ticker: position} for all currently open positions."""
-    positions = trading.get_all_positions()
+    positions = _retry(trading.get_all_positions, what="get_all_positions")
     return {p.symbol: p for p in positions}
 
 
 def get_account_summary(trading: TradingClient) -> dict:
-    acct = trading.get_account()
+    acct = _retry(trading.get_account, what="get_account")
     return {
         "equity":        float(acct.equity),
         "cash":          float(acct.cash),
@@ -91,7 +114,7 @@ def get_latest_price(data: StockHistoricalDataClient, ticker: str) -> float | No
     """Use last trade price — matches Alpaca's base_price for OTO stop orders."""
     try:
         req   = StockLatestTradeRequest(symbol_or_symbols=ticker)
-        trade = data.get_stock_latest_trade(req)
+        trade = _retry(data.get_stock_latest_trade, req, what=f"latest_trade {ticker}")
         price = float(trade[ticker].price)
         return price if price > 0 else None
     except Exception as e:
