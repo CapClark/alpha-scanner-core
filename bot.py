@@ -16,6 +16,7 @@ Usage:
 import argparse
 import os
 import csv
+import sys
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -267,10 +268,11 @@ def read_signals(top_n: int = TOP_N) -> tuple[list[dict], list[dict]]:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def run(dry_run: bool = False) -> None:
+def run(dry_run: bool = False) -> int:
     label = " [DRY RUN]" if dry_run else ""
     print(f"TRADING BOT{label}  |  {datetime.today().strftime('%Y-%m-%d %H:%M')}")
     print("=" * 60)
+    order_failures = 0        # count failed BUY/SELL submissions so the run can exit loud
 
     trading, data = get_clients()
 
@@ -293,7 +295,8 @@ def run(dry_run: bool = False) -> None:
         for s in sells:
             ticker = s["ticker"]
             if ticker in positions:
-                place_sell(trading, ticker, positions[ticker].qty, dry_run)
+                if not place_sell(trading, ticker, positions[ticker].qty, dry_run):
+                    order_failures += 1
             else:
                 print(f"  SKIP {ticker:<6} — not currently held")
         print()
@@ -327,13 +330,18 @@ def run(dry_run: bool = False) -> None:
                                 dry_run, position_size=position_size)
             if success:
                 opened += 1
+            else:
+                order_failures += 1
         print()
 
     # ── Summary ────────────────────────────────────────────────────────────────
     if not buys and not sells:
         print("No actionable signals today. Nothing to do.")
 
+    if order_failures:
+        print(f"  !! {order_failures} order(s) FAILED to submit — see errors above.")
     print("Done.")
+    return order_failures
 
 
 if __name__ == "__main__":
@@ -341,4 +349,6 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true",
                         help="Print planned orders without executing them")
     args = parser.parse_args()
-    run(dry_run=args.dry_run)
+    # Exit nonzero if any order failed so run_daily.sh marks the run FAILED
+    # instead of a full Alpaca outage passing under a green heartbeat.
+    sys.exit(1 if run(dry_run=args.dry_run) else 0)
