@@ -80,6 +80,15 @@ echo "" | tee -a "$LOG"
 echo "[ 4/5 ] Tracking P&L..." | tee -a "$LOG"
 $PYTHON tracker.py 2>&1 | tee -a "$LOG"; [ "${PIPESTATUS[0]}" -ne 0 ] && FAIL=1
 
+# Step 4b: rebuild the redacted public results page (public/index.html) for
+# strategygrade.io. Cosmetic — a failure here must NOT fail the trading run, so
+# there is no FAIL gate. To auto-deploy, set VERCEL_TOKEN and uncomment the
+# deploy line (see deploy/README.md).
+echo "" | tee -a "$LOG"
+echo "[ 4b  ] Publishing public results page..." | tee -a "$LOG"
+$PYTHON publish.py 2>&1 | tee -a "$LOG" || echo "  publish failed (non-fatal)" | tee -a "$LOG"
+# [ -n "$VERCEL_TOKEN" ] && vercel deploy ./public --prod --yes --token "$VERCEL_TOKEN" 2>&1 | tee -a "$LOG"
+
 # Step 5: stop-loss guardrail — re-arm any naked position (defends the 2026-06 bug
 # where expired stop legs left positions unprotected). Non-zero exit => something was
 # naked => the heartbeat fails so you get alerted even though trading "ran".
