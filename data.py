@@ -30,18 +30,22 @@ BATCH_SIZE = 100
 WRDS_HOST = "wrds-pgdata.wharton.upenn.edu"
 WRDS_PORT = 9737
 WRDS_DB   = "wrds"
-WRDS_USER = os.environ.get("WRDS_USER") or input("WRDS username: ")
+# Resolved lazily in WRDSConnection — NEVER prompt at import time. `data.py --topup`
+# (the daily step) imports this module but never touches WRDS, and it runs headless
+# under launchd, where a module-level input() raises EOFError and kills the step.
+WRDS_USER = os.environ.get("WRDS_USER")
 
 
 # ── WRDS connection ────────────────────────────────────────────────────────────
 
 class WRDSConnection:
     def __init__(self):
+        user = WRDS_USER or input("WRDS username: ")
         password = getpass.getpass("WRDS password: ")
         print("Connecting to WRDS...")
         self._conn = psycopg2.connect(
             host=WRDS_HOST, port=WRDS_PORT, dbname=WRDS_DB,
-            user=WRDS_USER, password=password,
+            user=user, password=password,
             sslmode="require", connect_timeout=30,
         )
         print("Connected.\n")
@@ -150,6 +154,20 @@ def split_since(ticker: str, last_date) -> bool:
         return bool((idx > pd.Timestamp(last_date)).any())
     except Exception:
         return False
+
+
+def feed_alive() -> bool:
+    """Canary: is the yfinance feed itself up?
+
+    Separates a genuine outage from a batch of permanently delisted tickers
+    (WPG, X, XLRN, YELL...) that can never return data no matter how healthy the
+    feed is. Those dead names are the only ones that ever reach "attempted", so
+    without this probe the outage check fired every single run -- crying wolf
+    daily and training the heartbeat alert to be ignored.
+    """
+    since = (datetime.today().date() - timedelta(days=10)).strftime("%Y-%m-%d")
+    probe = yf_fetch("SPY", since)
+    return probe is not None and len(probe) > 0
 
 
 def topup(tickers: list[str] | None = None) -> tuple[int, int]:
@@ -269,8 +287,13 @@ if __name__ == "__main__":
         # FAILED instead of letting the bot trade on stale prices under a green
         # heartbeat. attempted==0 means everything was already current (fine).
         if attempted > 0 and updated == 0:
-            print(f"ERROR: top-up attempted {attempted} tickers but updated 0 - "
-                  f"yfinance feed likely down. Failing loud.", file=sys.stderr)
-            sys.exit(1)
+            if feed_alive():
+                print(f"NOTE: {attempted} ticker(s) returned no data, but the feed is up "
+                      f"(SPY canary OK) - these are delisted/dead symbols, not an outage.")
+            else:
+                print(f"ERROR: top-up attempted {attempted} tickers, updated 0, and the "
+                      f"SPY canary also failed - yfinance feed is down. Failing loud.",
+                      file=sys.stderr)
+                sys.exit(1)
     else:
         refresh(tickers=args.tickers, start_date=args.start)

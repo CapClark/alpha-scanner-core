@@ -212,6 +212,45 @@ def place_buy(trading: TradingClient, data: StockHistoricalDataClient,
     return True
 
 
+def cancel_resting_orders(trading: TradingClient, ticker: str) -> int:
+    """Cancel every resting order on `ticker` and wait for the shares to be released.
+
+    The persistent GTC stop (added 2026-06 to fix stops that were expiring) reserves
+    the entire position as `held_for_orders`, so a signal exit hit
+    "insufficient qty available for order (requested: 37, available: 0)" and did NOT
+    close — while the run still reported success. Signal exits are the strategy's
+    actual edge, so this silently degraded it to stop-loss-only exits. Cancel first,
+    then close.
+
+    If the close fails after cancelling, the position is briefly naked — step 5 of
+    run_daily.sh (`guard_stops.py --rearm`) re-arms any unprotected position later in
+    the same run, so the exposure window is one run at most.
+    """
+    orders = _retry(trading.get_orders,
+                    GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500, nested=True),
+                    what=f"get_orders for {ticker}") or []
+    cancelled = 0
+    for o in orders:
+        if o.symbol != ticker:
+            continue
+        try:
+            trading.cancel_order_by_id(o.id)   # a mutation: never retry
+            cancelled += 1
+        except Exception as e:
+            print(f"  WARN could not cancel {ticker} order {o.id}: {e}")
+
+    # Cancellation is asynchronous — poll until the broker actually frees the shares.
+    if cancelled:
+        for _ in range(10):
+            time.sleep(1.0)
+            try:
+                if float(trading.get_open_position(ticker).qty_available) > 0:
+                    break
+            except Exception:
+                break
+    return cancelled
+
+
 def place_sell(trading: TradingClient, ticker: str,
                qty: str, dry_run: bool = False) -> bool:
     print(f"  SELL {ticker:<6}  qty={qty}  (closing position)")
@@ -220,6 +259,9 @@ def place_sell(trading: TradingClient, ticker: str,
         return True
 
     try:
+        freed = cancel_resting_orders(trading, ticker)
+        if freed:
+            print(f"  cancelled {freed} resting order(s) on {ticker} to free the shares")
         trading.close_position(ticker)
         return True
     except Exception as e:
