@@ -16,6 +16,8 @@ Usage:
 import argparse
 import os
 import csv
+import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -29,8 +31,10 @@ from alpaca.trading.requests import (
     GetOrdersRequest,
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass, QueryOrderStatus
+from alpaca.common.exceptions import APIError
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest, StockLatestTradeRequest
+from requests.exceptions import RequestException
 
 from signals import run as get_signals_output
 import signals as sig
@@ -67,16 +71,36 @@ def get_clients():
     return trading, data
 
 
+def _retry(fn, *args, what="Alpaca call", tries=4, base=3.0, **kwargs):
+    """Call an IDEMPOTENT Alpaca read with retry + exponential backoff.
+
+    A single transient broker error (504 gateway timeout, connection reset) at
+    the top of the run must not abort the whole day and skip every exit — which
+    is exactly what happened 2026-07-14. Only use this for reads (get_account,
+    get_all_positions, latest trade); never for order submission, where a retry
+    after a timed-out-but-accepted request could place a duplicate order.
+    """
+    for i in range(1, tries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except (APIError, RequestException) as e:
+            if i == tries:
+                raise
+            wait = base * (2 ** (i - 1))
+            print(f"  {what}: transient error ({e}); retry {i}/{tries - 1} in {wait:.0f}s")
+            time.sleep(wait)
+
+
 # ── Account info ───────────────────────────────────────────────────────────────
 
 def get_open_positions(trading: TradingClient) -> dict[str, object]:
     """Return {ticker: position} for all currently open positions."""
-    positions = trading.get_all_positions()
+    positions = _retry(trading.get_all_positions, what="get_all_positions")
     return {p.symbol: p for p in positions}
 
 
 def get_account_summary(trading: TradingClient) -> dict:
-    acct = trading.get_account()
+    acct = _retry(trading.get_account, what="get_account")
     return {
         "equity":        float(acct.equity),
         "cash":          float(acct.cash),
@@ -90,7 +114,7 @@ def get_latest_price(data: StockHistoricalDataClient, ticker: str) -> float | No
     """Use last trade price — matches Alpaca's base_price for OTO stop orders."""
     try:
         req   = StockLatestTradeRequest(symbol_or_symbols=ticker)
-        trade = data.get_stock_latest_trade(req)
+        trade = _retry(data.get_stock_latest_trade, req, what=f"latest_trade {ticker}")
         price = float(trade[ticker].price)
         return price if price > 0 else None
     except Exception as e:
@@ -173,11 +197,19 @@ def place_buy(trading: TradingClient, data: StockHistoricalDataClient,
             stop_loss=StopLossRequest(stop_price=stop_price),
         )
         trading.submit_order(order)
-        log_trade_entry(ticker, strategy, robustness, price, qty)
-        return True
     except Exception as e:
         print(f"  ERROR placing BUY for {ticker}: {e}")
         return False
+    # Order is live now (with its protective stop). A local trade_log write
+    # failure must NOT report the trade as failed - that miscounts open slots
+    # (risking over-opening) and loses the position from the ledger entirely.
+    # Log separately, loud on failure, but still report the BUY as placed.
+    try:
+        log_trade_entry(ticker, strategy, robustness, price, qty)
+    except Exception as e:
+        print(f"  WARNING: BUY for {ticker} SUBMITTED but trade_log write FAILED "
+              f"(position is live, untracked): {e}")
+    return True
 
 
 def place_sell(trading: TradingClient, ticker: str,
@@ -267,10 +299,11 @@ def read_signals(top_n: int = TOP_N) -> tuple[list[dict], list[dict]]:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def run(dry_run: bool = False) -> None:
+def run(dry_run: bool = False) -> int:
     label = " [DRY RUN]" if dry_run else ""
     print(f"TRADING BOT{label}  |  {datetime.today().strftime('%Y-%m-%d %H:%M')}")
     print("=" * 60)
+    order_failures = 0        # count failed BUY/SELL submissions so the run can exit loud
 
     trading, data = get_clients()
 
@@ -293,7 +326,8 @@ def run(dry_run: bool = False) -> None:
         for s in sells:
             ticker = s["ticker"]
             if ticker in positions:
-                place_sell(trading, ticker, positions[ticker].qty, dry_run)
+                if not place_sell(trading, ticker, positions[ticker].qty, dry_run):
+                    order_failures += 1
             else:
                 print(f"  SKIP {ticker:<6} — not currently held")
         print()
@@ -327,13 +361,18 @@ def run(dry_run: bool = False) -> None:
                                 dry_run, position_size=position_size)
             if success:
                 opened += 1
+            else:
+                order_failures += 1
         print()
 
     # ── Summary ────────────────────────────────────────────────────────────────
     if not buys and not sells:
         print("No actionable signals today. Nothing to do.")
 
+    if order_failures:
+        print(f"  !! {order_failures} order(s) FAILED to submit — see errors above.")
     print("Done.")
+    return order_failures
 
 
 if __name__ == "__main__":
@@ -341,4 +380,6 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true",
                         help="Print planned orders without executing them")
     args = parser.parse_args()
-    run(dry_run=args.dry_run)
+    # Exit nonzero if any order failed so run_daily.sh marks the run FAILED
+    # instead of a full Alpaca outage passing under a green heartbeat.
+    sys.exit(1 if run(dry_run=args.dry_run) else 0)
