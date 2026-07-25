@@ -48,6 +48,27 @@ TRADE_COUNTERFACTUAL = {
 # open" record — add a new dict on top whenever something breaks and gets fixed.
 BUILD_LOG = [
     {
+        "date": "2026-07-25", "tag": "infra",
+        "title": "The monitoring was broken, so nothing else mattered",
+        "rows": [
+            ("Impact", "Alert delivery had been silently disabled for nearly three weeks. During "
+                       "that window six runs reported failure and none of them reached me — the "
+                       "dead-man’s switch was recording outages correctly and mailing nobody."),
+            ("What it hid", "All six failures were the same blocked-exit defect: the strategy issued "
+                            "sell signals on six separate days and the system could not execute one of "
+                            "them. The bug was already understood by then; what was missing was any "
+                            "signal that it had been happening at all."),
+            ("Fix", "Re-enabled notifications and verified delivery with a live test alert, then moved "
+                    "the check from a naive daily period to an explicit weekday cron schedule in market "
+                    "time — the old schedule false-alarmed every weekend, which is what made the alerts "
+                    "easy to ignore in the first place."),
+            ("Lesson", "This was the most important failure of the project. Every other bug here was "
+                       "found by going and looking; this one decided whether looking was even necessary. "
+                       "An automated system without working alerts isn’t automated, it’s unobserved — and "
+                       "false alarms are how real alerts get trained into noise."),
+        ],
+    },
+    {
         "date": "2026-07-24", "tag": "infra",
         "title": "Two missed sessions — the “always-on” host wasn’t",
         "rows": [
