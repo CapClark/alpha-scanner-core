@@ -91,7 +91,9 @@ $PYTHON tracker.py 2>&1 | tee -a "$LOG"; [ "${PIPESTATUS[0]}" -ne 0 ] && FAIL=1
 echo "" | tee -a "$LOG"
 echo "[ 4b  ] Publishing public results page..." | tee -a "$LOG"
 $PYTHON publish.py 2>&1 | tee -a "$LOG" || echo "  publish failed (non-fatal)" | tee -a "$LOG"
-[ -n "$VERCEL_TOKEN" ] && vercel deploy ./public --prod --yes 2>&1 | tee -a "$LOG" || true
+# Publish to Vercel via REST (no node/CLI/git on the host). Self-guards on a missing
+# token and can only ever exit 0, so a cosmetic publish never fails the trading run.
+$PYTHON deploy_vercel.py 2>&1 | tee -a "$LOG" || true
 
 # Step 5: stop-loss guardrail — re-arm any naked position (defends the 2026-06 bug
 # where expired stop legs left positions unprotected). Non-zero exit => something was

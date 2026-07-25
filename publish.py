@@ -41,6 +41,107 @@ TRADE_COUNTERFACTUAL = {
     ("INTU", "2026-06-26"): -5.00,   # intended disaster stop at entry-5%, vs -13.09% realized naked
 }
 
+# Build Log — a curated, honest engineering journal shown on the public page. Each
+# entry is a real incident: what broke / root cause / fix / lesson (or, for research
+# entries, finding / outcome / lesson). Newest first. Redacted like everything else
+# (percentages and public tickers only, never dollars). This is the "learning in the
+# open" record — add a new dict on top whenever something breaks and gets fixed.
+BUILD_LOG = [
+    {
+        "date": "2026-07-24", "tag": "infra",
+        "title": "Two missed sessions — the “always-on” host wasn’t",
+        "rows": [
+            ("Impact", "The daily run silently skipped two trading days. Broker-side stops "
+                       "kept the downside protected, but signal-based entries and exits were missed."),
+            ("Root cause", "The always-on Mac slept through the 09:30–10:30 ET window. "
+                           "<span class='mono'>launchd</span> timers don’t fire in darkwake, so the "
+                           "market-open gate never even ran — no error, no log, just silence."),
+            ("Fix", "Scheduled a guaranteed weekday wake at 09:20 ET and disabled sleep on AC power. "
+                    "A missed run now trips the heartbeat instead of vanishing."),
+            ("Lesson", "“Always-on” is a setting you verify, not an assumption. Silent skips are "
+                       "more dangerous than loud crashes — you don’t find out until you go looking."),
+        ],
+    },
+    {
+        "date": "2026-07-05", "tag": "research",
+        "title": "The intuitive stop was deleting the edge",
+        "rows": [
+            ("Finding", "Backtested the tight 5% stop across the full universe: it removes roughly "
+                        "half of the strategy’s expectancy by cutting mean-reversion positions right "
+                        "before they recover. Trailing-ATR variants failed the same way (Sharpe ~1.3 → ~0.9 "
+                        "across every configuration tested)."),
+            ("Outcome", "Exits are now the indicator signal itself plus a single wide 4×ATR disaster "
+                        "stop — nothing tighter."),
+            ("Lesson", "A risk control that <em>feels</em> prudent can quietly destroy the strategy. "
+                       "Measure the control before you trust it."),
+        ],
+    },
+    {
+        "date": "2026-07-01", "tag": "fix",
+        "title": "Fixing the stop bug silently broke signal exits",
+        "rows": [
+            ("What broke", "After moving to persistent GTC stops, every position’s shares were "
+                           "reserved by its resting stop order. The routine close then failed with "
+                           "“available: 0”, so the system quietly degraded to stop-only exits — and "
+                           "signal-based exits are the documented edge."),
+            ("Fix", "Cancel the resting stop and wait for the shares to release before closing."),
+            ("Lesson", "Bug fixes create bugs at the seams. This one was invisible until I traced a "
+                       "close call that returned success but did nothing."),
+        ],
+    },
+    {
+        "date": "2026-06-26", "tag": "bug",
+        "title": "A protective stop that had quietly expired",
+        "rows": [
+            ("What broke", "One position ran to −13% instead of stopping near −5%. Its stop leg had "
+                           "expired and was never re-attached, so the position sat unprotected."),
+            ("Fix", "Persistent GTC stops plus a daily guardrail that re-arms a stop on any naked "
+                    "position. The isolated cost is quantified in Scenario Analysis above."),
+            ("Lesson", "A risk control you don’t check every day isn’t a risk control. This single "
+                       "failure is the most instructive trade on the page."),
+        ],
+    },
+    {
+        "date": "2026-05-15", "tag": "research",
+        "title": "In-sample ranking didn’t predict out-of-sample",
+        "rows": [
+            ("Finding", "Building the walk-forward validator showed backtest ranking had no significant "
+                        "correlation with out-of-sample ranking (p &gt; 0.05 in every window)."),
+            ("Outcome", "The live watchlist is sorted by out-of-sample Sharpe from validation, not the "
+                        "raw backtest score. RSI(21) was cut outright for a negative OOS Sharpe."),
+            ("Lesson", "The backtest tells you what worked, not what will work. The validation layer is "
+                       "the actual product."),
+        ],
+    },
+]
+
+
+def build_log_section() -> str:
+    """Render the Build Log as section 05. Pure presentation over BUILD_LOG."""
+    tag_label = {"bug": "Bug", "fix": "Fix", "infra": "Infra", "research": "Research"}
+    entries = ""
+    for e in BUILD_LOG:
+        rows = ""
+        for k, v in e["rows"]:
+            vcls = " lesson" if k.lower() == "lesson" else ""
+            rows += (f'<div class="ble-row"><div class="ble-k">{k}</div>'
+                     f'<div class="ble-v{vcls}">{v}</div></div>')
+        entries += (
+            f'<div class="ble">'
+            f'<div class="ble-side"><div class="ble-date">{e["date"]}</div>'
+            f'<span class="ble-tag tag-{e["tag"]}">{tag_label.get(e["tag"], e["tag"])}</span></div>'
+            f'<div class="ble-body"><h3 class="ble-title">{e["title"]}</h3>{rows}</div>'
+            f'</div>'
+        )
+    return f"""
+<section class="sec">
+  <div class="sechd"><span class="idx">05</span><h2>Build Log</h2><span class="rule"></span>
+    <span class="hint mut">what broke · root cause · fix · lesson</span></div>
+  <p class="blog-intro">A running record of what has broken and how it was diagnosed and fixed.
+    Paper-traded on purpose — the point is to learn the system end to end in the open, failures included.</p>
+  <div class="blog">{entries}</div>
+</section>"""
+
 
 def apply_counterfactual(df: pd.DataFrame) -> pd.DataFrame:
     """Return a copy of the trade log with known machine-failure losses replaced by
@@ -350,6 +451,33 @@ footer span{flex:1 1 240px; min-width:0}
   .strip{flex-wrap:nowrap; overflow-x:auto} .strip .cell{min-width:150px}
   .sccols{grid-template-columns:1fr}
   header{flex-direction:column; align-items:flex-start; gap:10px; position:static}
+}
+/* build log */
+.blog-intro{max-width:760px; margin:0 0 14px; color:var(--tx2); font-size:13px; line-height:1.6}
+.blog{border:1px solid var(--bd); border-radius:8px; overflow:hidden; background:var(--p1)}
+.ble{display:grid; grid-template-columns:150px 1fr; border-top:1px solid var(--bd)}
+.ble:first-child{border-top:none}
+.ble-side{padding:17px 16px 18px; border-right:1px solid var(--bd); background:var(--p2)}
+.ble-date{font-family:var(--mono); font-size:11.5px; color:var(--tx2); letter-spacing:.03em}
+.ble-tag{display:inline-block; margin-top:10px; font-family:var(--mono); font-size:9px;
+  letter-spacing:.14em; text-transform:uppercase; padding:2px 8px; border-radius:20px; border:1px solid var(--bd2)}
+.tag-bug{color:var(--neg); border-color:var(--negm)}
+.tag-fix{color:var(--pos); border-color:rgba(82,210,115,.45)}
+.tag-infra{color:var(--acc); border-color:rgba(87,157,255,.45)}
+.tag-research{color:var(--amb); border-color:rgba(232,173,85,.45)}
+.ble-body{padding:16px 20px 19px; min-width:0}
+.ble-title{margin:0 0 11px; font-size:14px; font-weight:600; color:var(--tx); letter-spacing:.1px}
+.ble-row{display:grid; grid-template-columns:104px 1fr; gap:14px; margin-top:8px}
+.ble-k{font-family:var(--mono); font-size:9.5px; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--mut); padding-top:3px}
+.ble-v{font-size:12.5px; line-height:1.55; color:var(--tx2)}
+.ble-v.lesson{color:var(--tx)}
+.ble-v em{color:var(--tx); font-style:italic}
+@media(max-width:640px){
+  .ble{grid-template-columns:1fr}
+  .ble-side{border-right:none; border-bottom:1px solid var(--bd); display:flex; align-items:center; gap:12px}
+  .ble-tag{margin-top:0}
+  .ble-row{grid-template-columns:1fr; gap:3px}
 }
 """
 
@@ -749,6 +877,8 @@ def render(stats, cf, meta, bench, open_rows, closed_rows) -> str:
     </table>
   </div></div>
 </section>
+
+{build_log_section()}
 
 <footer>
   <span>{SITE} · paper-traded · updated {updated}</span>

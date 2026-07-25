@@ -19,6 +19,10 @@ env/
 datasets/
 *.log
 
+# Generated public page (publish.py output) + its Vercel link. Rebuilt every run and
+# rsynced to the host, so there is nothing to version here.
+public/
+
 # Ignore Mac system files
 .DS_Store
 
