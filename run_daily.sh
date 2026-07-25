@@ -60,6 +60,20 @@ echo "======================================" | tee "$LOG"
 echo "DAILY RUN  $(date '+%Y-%m-%d %H:%M')" | tee -a "$LOG"
 echo "======================================" | tee -a "$LOG"
 
+# Step 0: power preflight. This host must live on AC. On battery macOS sleeps it
+# aggressively and launchd timers do NOT fire in darkwake, so a drained battery means
+# every future run is silently skipped — the exact failure that cost two sessions in
+# July 2026, found only by going and looking. Route it through the heartbeat so it
+# alerts while there is still charge left to act on. Never blocks the run.
+if command -v pmset >/dev/null 2>&1; then
+    if ! pmset -g ps 2>/dev/null | head -1 | grep -qi "AC Power"; then
+        BATT="$(pmset -g batt 2>/dev/null | grep -oE '[0-9]+%' | head -1)"
+        echo "  WARN host is on BATTERY (${BATT:-level unknown}), not AC — plug it in." | tee -a "$LOG"
+        echo "       On battery this machine sleeps; once it drains, runs stop silently." | tee -a "$LOG"
+        FAIL=1
+    fi
+fi
+
 # Step 1: top up prices via yfinance
 echo "" | tee -a "$LOG"
 echo "[ 1/5 ] Updating prices..." | tee -a "$LOG"
