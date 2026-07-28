@@ -10,7 +10,7 @@
 # Resilience: set HEALTHCHECK_URL=<your healthchecks.io ping url> in .env to enable a
 # dead-man's-switch — a missed or failed run then alerts you within the grace window.
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 # Portable venv python — works on the laptop and the cloud host alike.
 # The cd above already moved us here, so pwd is its absolute path.
@@ -55,9 +55,11 @@ fi
 # Every decision is appended to datasets/gate.log. A skip used to write nothing at
 # all — no log, no marker, no ping — so those three dead days left zero trace on disk.
 if [ "$SIGNALS_ONLY" != true ]; then
-    # Fields are "<GO|SKIP> <ET-time|reason> <ET-date>". The date stays LAST because
-    # the marker filename is parsed off the end.
-    GATE="$("$PYTHON" - <<'PYEOF' 2>/dev/null || echo "SKIP api-error 0000-00-00"
+    # Fields are "<GO|SKIP> <ET-time|reason> <ET-date>". Gate stderr is KEPT
+    # (datasets/gate_err.log): an expired key or dead venv used to collapse to the
+    # bare word "api-error" with the traceback thrown away — the zero-trace failure
+    # mode this whole block exists to kill.
+    GATE="$("$PYTHON" - <<'PYEOF' 2>>datasets/gate_err.log || echo "SKIP api-error 0000-00-00"
 import os, datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
@@ -69,19 +71,46 @@ ok = c.is_open and datetime.time(9, 30) <= et.time() <= datetime.time(15, 30)
 print(("GO" if ok else "SKIP"), et.strftime("%H:%M"), et.strftime("%Y-%m-%d"))
 PYEOF
 )"
-    GATE_DATE="${GATE##* }"
-    GATE_ET="$(echo "$GATE" | cut -d' ' -f2)"
-    printf '%s  host=%s  gate=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$(date +%H:%M)" "$GATE" \
-        >> datasets/gate.log
-    # Bound the trace — ~34 lines/day, so 4000 lines is roughly four months of history.
-    if [ "$(wc -l < datasets/gate.log)" -gt 4000 ]; then
+    # Parse ONE line — the last. On a print-then-crash the `|| echo` fallback is
+    # APPENDED to whatever python already wrote, so reading the status off line 1
+    # and the date off line N can mix two different verdicts. The last line is
+    # always the final word.
+    read -r GATE_STATUS GATE_ET GATE_DATE _ <<< "$(printf '%s\n' "$GATE" | tail -1)"
+    # A GO must carry a well-formed HH:MM and YYYY-MM-DD or it is not a GO: a
+    # malformed date would write a marker (e.g. .ran_0000-00-00) that never matches
+    # a future day — the bot would trade once and then skip forever.
+    case "$GATE_STATUS $GATE_ET $GATE_DATE" in
+        GO\ [0-9][0-9]:[0-9][0-9]\ [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+        GO*) GATE_STATUS=SKIP; GATE_ET=malformed ;;
+    esac
+    # Decide, then log the DECISION — not just Alpaca's verdict. With a six-hour
+    # window most fires are "GO but already claimed"; without the action field the
+    # log can't say which fire actually traded.
+    if [ "$GATE_STATUS" != "GO" ]; then
+        ACTION=skip
+    elif [ -f "datasets/.ran_${GATE_DATE}" ]; then
+        ACTION=done
+    elif ( set -o noclobber; : > "datasets/.ran_${GATE_DATE}" ) 2>/dev/null; then
+        # noclobber create is atomic: exactly one process can win the claim, so a
+        # manual run racing the timer can't double-trade. Stale markers pruned only
+        # AFTER today is claimed. If the create fails for any other reason (disk
+        # full, TCC), we refuse to trade unclaimed — an uncapped rerun every fire
+        # is worse than a missed day, and the missed ping alerts anyway.
+        ACTION=RUN
+        find datasets -name '.ran_*' ! -name ".ran_${GATE_DATE}" -delete 2>/dev/null
+    else
+        ACTION=unclaimed
+    fi
+    printf '%s  gate=%s %s %s  action=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" \
+        "$GATE_STATUS" "$GATE_ET" "$GATE_DATE" "$ACTION" >> datasets/gate.log
+    # Bound both traces — gate.log ~34 lines/day, gate_err.log only on failures.
+    if [ "$(wc -l < datasets/gate.log 2>/dev/null || echo 0)" -gt 4000 ]; then
         tail -2000 datasets/gate.log > datasets/gate.log.tmp && mv datasets/gate.log.tmp datasets/gate.log
     fi
-    if [ "${GATE%% *}" != "GO" ] || [ -f "datasets/.ran_${GATE_DATE}" ]; then
-        exit 0            # outside the session window (or already ran today) — skip quietly
+    if [ "$(wc -l < datasets/gate_err.log 2>/dev/null || echo 0)" -gt 2000 ]; then
+        tail -500 datasets/gate_err.log > datasets/gate_err.log.tmp && mv datasets/gate_err.log.tmp datasets/gate_err.log
     fi
-    rm -f datasets/.ran_*             # claim today up-front so overlapping fires can't double-run
-    touch "datasets/.ran_${GATE_DATE}"
+    [ "$ACTION" = RUN ] || exit 0
 fi
 
 LOG="datasets/daily_$(date +%Y-%m-%d).log"
@@ -108,6 +137,15 @@ if command -v pmset >/dev/null 2>&1; then
         BATT="$(pmset -g batt 2>/dev/null | grep -oE '[0-9]+%' | head -1)"
         echo "  WARN host is on BATTERY (${BATT:-level unknown}), not AC — plug it in." | tee -a "$LOG"
         echo "       On battery this machine sleeps; once it drains, runs stop silently." | tee -a "$LOG"
+        FAIL=1
+    fi
+    # AC power alone is not enough: a macOS update reverted `sleep 0` once already
+    # (2026-07-23, cost two sessions) while the machine sat happily on AC. Check the
+    # live sleep policy, not just the power source.
+    AC_SLEEP="$(pmset -g custom 2>/dev/null | awk '/^AC Power:/{ac=1} ac && / sleep /{print $2; exit}')"
+    if [ -n "$AC_SLEEP" ] && [ "$AC_SLEEP" != "0" ]; then
+        echo "  WARN AC sleep policy is ${AC_SLEEP}, not 0 — a macOS update likely reverted it." | tee -a "$LOG"
+        echo "       Fix: sudo pmset -c sleep 0 disablesleep 1   (launchd can't fire in darkwake)" | tee -a "$LOG"
         FAIL=1
     fi
 fi
@@ -163,13 +201,35 @@ fi
 # way the tight 5% stop did (Sharpe 1.28-1.32 -> 0.89 across every trail config).
 # Exits are: indicator signal (the strategy) + a wide 4xATR disaster stop set at entry.
 
+# Local dead-man's stamp, independent of healthchecks.io. The remote channel itself
+# was silently broken for ~3 weeks in July — this file is the on-disk truth a human
+# (or the presentation-morning health check) can read without trusting the alerter:
+# stat -f %Sm datasets/.last_success
+if [ "$FAIL" -eq 0 ]; then
+    date '+%Y-%m-%d %H:%M:%S' > datasets/.last_success
+fi
+
+# Retention sweep — gate.log self-trims, but nothing bounded the rest: daily logs
+# accumulate forever and launchd_out.log grows every fire. Keep 90 days of dailies
+# and cap the launchd streams (they are duplicates of the daily logs anyway).
+find datasets -name 'daily_*.log' -mtime +90 -delete 2>/dev/null
+for f in datasets/launchd_out.log datasets/launchd_err.log; do
+    if [ -f "$f" ] && [ "$(wc -c < "$f")" -gt 5000000 ]; then
+        tail -c 1000000 "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    fi
+done
+
 # Heartbeat — ping success, or /fail if any step above failed. Silent no-op if unset.
 if [ -n "$HEALTHCHECK_URL" ]; then
+    # The ping URL is a bearer capability (holding it lets anyone forge or suppress
+    # the heartbeat) — hide it from -x tracing, same as the credential reads above.
+    __xt="${-//[^x]/}"; set +x
     if [ "$FAIL" -eq 0 ]; then
         curl -fsS -m 10 "$HEALTHCHECK_URL" >/dev/null 2>&1
     else
         curl -fsS -m 10 "${HEALTHCHECK_URL%/}/fail" >/dev/null 2>&1
     fi
+    [ -n "$__xt" ] && set -x
 fi
 
 echo "" | tee -a "$LOG"

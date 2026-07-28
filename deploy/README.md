@@ -1,5 +1,15 @@
 # Always-on host deployment (Phase 1: daily executor)
 
+> ⚠️ **STALE RUNBOOK — do not follow for disaster recovery.** The live deployment is
+> a macOS M1 MacBook Air (TZ America/New_York), launchd user agents (StartInterval
+> 1800 **+** StartCalendarInterval fire times), code delivered by **rsync** (host is
+> not a git checkout, has no node), uv-built python venvs, healthchecks.io heartbeat,
+> and Vercel publish via `deploy_vercel.py` (REST). Rebuilding from this Ubuntu/cron
+> document would silently reintroduce every bug fixed in June–July 2026 (gate trace,
+> wide session window, pmset checks, secret-safe tracing). For the real topology read
+> the header comments of `run_daily.sh` and the plists on the host at
+> `~/Library/LaunchAgents/com.alphascanner.daily.plist` / `com.canslim.daily.plist`.
+
 Moves the daily trading automation off the laptop (where it went dark for ~2 weeks
 after a timezone change + laptop sleep) onto an always-on Ubuntu VM.
 
