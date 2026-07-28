@@ -213,7 +213,7 @@ fi
 # accumulate forever and launchd_out.log grows every fire. Keep 90 days of dailies
 # and cap the launchd streams (they are duplicates of the daily logs anyway).
 find datasets -name 'daily_*.log' -mtime +90 -delete 2>/dev/null
-for f in datasets/launchd_out.log datasets/launchd_err.log; do
+for f in datasets/launchd_out.log datasets/launchd_err.log datasets/cron.log; do
     if [ -f "$f" ] && [ "$(wc -c < "$f")" -gt 5000000 ]; then
         tail -c 1000000 "$f" > "$f.tmp" && mv "$f.tmp" "$f"
     fi
