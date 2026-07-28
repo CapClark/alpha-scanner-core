@@ -17,11 +17,20 @@ cd "$(dirname "$0")"
 PYTHON="$(pwd)/venv/bin/python"
 
 # Read just the vars we need from .env (no full source → no surprises from other vars).
+#
+# Tracing is forced OFF across this block and restored after. `bash -x` expands every
+# assignment before printing it, so debugging this script with -x used to dump the raw
+# VERCEL_TOKEN to stdout — on 2026-07-28 that put a live token in a terminal transcript
+# and forced a rotation. Secrets must be unreadable by the debugger, not merely
+# unlikely to be printed.
+__xtrace="${-//[^x]/}"          # remember whether -x was on ("x" or "")
+set +x
 HEALTHCHECK_URL="$(grep -E '^HEALTHCHECK_URL=' .env 2>/dev/null | head -1 | cut -d= -f2-)"
 # Vercel deploy token for the public-page publish step. Exported (not passed as a
-# --token CLI arg) so it never shows up in `ps`; the vercel CLI reads it from env.
+# --token CLI arg) so it never shows up in `ps`; deploy_vercel.py reads it from env.
 VERCEL_TOKEN="$(grep -E '^VERCEL_TOKEN=' .env 2>/dev/null | head -1 | cut -d= -f2-)"
 export VERCEL_TOKEN
+[ -n "$__xtrace" ] && set -x
 
 FAIL=0   # flips to 1 if any step exits non-zero — drives the heartbeat alert
 
@@ -30,12 +39,25 @@ if [[ "$1" == "--signals-only" ]]; then
     SIGNALS_ONLY=true
 fi
 
-# --- Market-open gate (timezone-proof) --------------------------------------
-# launchd fires this every ~30 min; whether we actually run is decided by Alpaca's
-# market clock, NOT the host clock — so it runs once, just after the real US open,
-# regardless of any system/launchd timezone drift. Manual --signals-only bypasses it.
+# --- Market-session gate (timezone-proof) -----------------------------------
+# launchd fires this on a timer; whether we actually run is decided by Alpaca's
+# market clock, NOT the host clock — so it runs once per session regardless of any
+# system/launchd timezone drift. Manual --signals-only bypasses it.
+#
+# The window is 09:30–15:30 ET, not the old 09:30–10:30. macOS defers and coalesces
+# launchd StartInterval timers on an idle Mac: measured 2026-07-28, 1046 fires over
+# 31 days of uptime = ~34/day against the 48/day a 1800s interval nominally gives.
+# Two fires an hour is exactly what guarantees a hit inside a one-hour window; at
+# 34/day that guarantee is gone, and 2026-07-23/24/27 were each lost to a window
+# that happened to contain no fire. A wider window trades a worse fill for actually
+# trading. The .ran_ marker still pins it to one run per session.
+#
+# Every decision is appended to datasets/gate.log. A skip used to write nothing at
+# all — no log, no marker, no ping — so those three dead days left zero trace on disk.
 if [ "$SIGNALS_ONLY" != true ]; then
-    GATE="$("$PYTHON" - <<'PYEOF' 2>/dev/null || echo "SKIP error"
+    # Fields are "<GO|SKIP> <ET-time|reason> <ET-date>". The date stays LAST because
+    # the marker filename is parsed off the end.
+    GATE="$("$PYTHON" - <<'PYEOF' 2>/dev/null || echo "SKIP api-error 0000-00-00"
 import os, datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
@@ -43,15 +65,23 @@ load_dotenv(".env")
 from alpaca.trading.client import TradingClient
 c = TradingClient(os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY"), paper=True).get_clock()
 et = c.timestamp.astimezone(ZoneInfo("America/New_York"))
-ok = c.is_open and datetime.time(9, 30) <= et.time() <= datetime.time(10, 30)
-print(("GO" if ok else "SKIP"), et.strftime("%Y-%m-%d"))
+ok = c.is_open and datetime.time(9, 30) <= et.time() <= datetime.time(15, 30)
+print(("GO" if ok else "SKIP"), et.strftime("%H:%M"), et.strftime("%Y-%m-%d"))
 PYEOF
 )"
-    if [ "${GATE%% *}" != "GO" ] || [ -f "datasets/.ran_${GATE##* }" ]; then
-        exit 0            # outside the post-open window (or already ran today) — skip quietly
+    GATE_DATE="${GATE##* }"
+    GATE_ET="$(echo "$GATE" | cut -d' ' -f2)"
+    printf '%s  host=%s  gate=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$(date +%H:%M)" "$GATE" \
+        >> datasets/gate.log
+    # Bound the trace — ~34 lines/day, so 4000 lines is roughly four months of history.
+    if [ "$(wc -l < datasets/gate.log)" -gt 4000 ]; then
+        tail -2000 datasets/gate.log > datasets/gate.log.tmp && mv datasets/gate.log.tmp datasets/gate.log
+    fi
+    if [ "${GATE%% *}" != "GO" ] || [ -f "datasets/.ran_${GATE_DATE}" ]; then
+        exit 0            # outside the session window (or already ran today) — skip quietly
     fi
     rm -f datasets/.ran_*             # claim today up-front so overlapping fires can't double-run
-    touch "datasets/.ran_${GATE##* }"
+    touch "datasets/.ran_${GATE_DATE}"
 fi
 
 LOG="datasets/daily_$(date +%Y-%m-%d).log"
@@ -59,6 +89,14 @@ LOG="datasets/daily_$(date +%Y-%m-%d).log"
 echo "======================================" | tee "$LOG"
 echo "DAILY RUN  $(date '+%Y-%m-%d %H:%M')" | tee -a "$LOG"
 echo "======================================" | tee -a "$LOG"
+
+# A start well after the open means launchd deferred the timer past the post-open
+# window, so the fills are worse than the strategy intends. Surface it, but do NOT
+# set FAIL: a late run is still far better than the missed session it replaced, and
+# turning it red would retrain the alerts back into noise.
+if [ -n "$GATE_ET" ] && [[ "$GATE_ET" > "10:30" ]]; then
+    echo "  WARN late start ${GATE_ET} ET — launchd missed the post-open window." | tee -a "$LOG"
+fi
 
 # Step 0: power preflight. This host must live on AC. On battery macOS sleeps it
 # aggressively and launchd timers do NOT fire in darkwake, so a drained battery means
