@@ -60,14 +60,33 @@ if [ "$SIGNALS_ONLY" != true ]; then
     # bare word "api-error" with the traceback thrown away — the zero-trace failure
     # mode this whole block exists to kill.
     GATE="$("$PYTHON" - <<'PYEOF' 2>>datasets/gate_err.log || echo "SKIP api-error 0000-00-00"
-import os, datetime
+import os, sys, time, datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 load_dotenv(".env")
 from alpaca.trading.client import TradingClient
-c = TradingClient(os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY"), paper=True).get_clock()
-et = c.timestamp.astimezone(ZoneInfo("America/New_York"))
-ok = c.is_open and datetime.time(9, 30) <= et.time() <= datetime.time(15, 30)
+
+# Retry the clock call: this host loses DNS in multi-hour blocks overnight local
+# time (nightly ~12:00-16:00 ET, see gate_err.log — the router was the only public
+# resolver and drops when the ISP session renews). A single get_clock() then turns
+# a healthy fire into a wasted one. Three tries covers a blip; a real outage is
+# covered by cron re-firing every 10 minutes and by the missing heartbeat.
+client = TradingClient(os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY"), paper=True)
+clock = None
+for attempt in range(3):
+    try:
+        clock = client.get_clock()
+        break
+    except Exception as exc:
+        # stderr only — stdout is the verdict channel and must stay single-line.
+        print(f"gate attempt {attempt + 1}/3: {exc!r}", file=sys.stderr)
+        if attempt < 2:
+            time.sleep(2 * (attempt + 1))
+if clock is None:
+    raise SystemExit(1)          # -> shell fallback writes "SKIP api-error 0000-00-00"
+
+et = clock.timestamp.astimezone(ZoneInfo("America/New_York"))
+ok = clock.is_open and datetime.time(9, 30) <= et.time() <= datetime.time(15, 30)
 print(("GO" if ok else "SKIP"), et.strftime("%H:%M"), et.strftime("%Y-%m-%d"))
 PYEOF
 )"
